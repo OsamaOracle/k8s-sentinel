@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-sentinel-config
+  namespace: k8s-sentinel
+  labels:
+    app.kubernetes.io/name: k8s-sentinel
+data:
+  POLL_INTERVAL_SECONDS: "15"
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  DEV_MODE: "false"

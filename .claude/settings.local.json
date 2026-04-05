@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"D:\\\\my github\\\\k8s-sentinel\" /s /b 2>&1)",
+      "Skill(claude-api)",
+      "Bash(find \"D:/my github/k8s-sentinel/backend\" -type f | sort 2>/dev/null || dir /s /b \"D:\\\\my github\\\\k8s-sentinel\\\\backend\" 2>&1)"
+    ]
+  }
+}
