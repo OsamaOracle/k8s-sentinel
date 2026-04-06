@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.k8s_client import init_k8s
 from core.poller import start_poller, stop_poller
-from routers import diagnosis, events, pods, resources
+from routers import diagnosis, events, pods, resources, timeline
 
 DEV_MODE = os.environ.get("DEV_MODE", "false").lower() == "true"
 
@@ -42,6 +42,7 @@ app.include_router(pods.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(resources.router, prefix="/api")
 app.include_router(diagnosis.router, prefix="/api")
+app.include_router(timeline.router, prefix="/api", tags=["timeline"])
 
 
 @app.get("/healthz", tags=["health"])

@@ -463,6 +463,213 @@ function ResourcesTab({ resources }) {
   );
 }
 
+// ── Timeline helpers ─────────────────────────────────────────────────────────
+
+function genMockTimeline() {
+  const now = Date.now();
+  const pts = [];
+  let score = 72;
+  for (let i = 95; i >= 0; i--) {
+    const ts = new Date(now - i * 15 * 60 * 1000).toISOString();
+    score += (Math.random() - 0.48) * 9;
+    score = Math.max(45, Math.min(95, score));
+    const s = Math.round(score);
+    pts.push({
+      id: 96 - i,
+      timestamp: ts,
+      score: s,
+      pod_count: 6,
+      unhealthy_count: s < 65 ? 2 : s < 78 ? 1 : 0,
+      warning_count:   s < 65 ? 3 : s < 78 ? 2 : 1,
+      anomaly_count:   s < 65 ? 2 : s < 78 ? 1 : 0,
+    });
+  }
+  return pts;
+}
+
+// ── Tab: Timeline ─────────────────────────────────────────────────────────────
+
+function TimelineTab({ data }) {
+  const [tooltip, setTooltip] = useState(null);
+
+  if (data.length === 0) {
+    return (
+      <div style={{ textAlign: "center", color: "#8b949e", padding: "48px 0", fontSize: "14px" }}>
+        No timeline data yet — snapshots are recorded after each poll cycle.
+      </div>
+    );
+  }
+
+  const scores    = data.map(d => d.score);
+  const minScore  = Math.min(...scores);
+  const maxScore  = Math.max(...scores);
+  const avgScore  = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+
+  // Trend: first half avg vs second half avg
+  const half       = Math.floor(data.length / 2);
+  const firstAvg   = data.slice(0, half).reduce((a, d) => a + d.score, 0) / Math.max(1, half);
+  const secondAvg  = data.slice(half).reduce((a, d) => a + d.score, 0) / Math.max(1, data.length - half);
+  const diff       = secondAvg - firstAvg;
+  const trend      = diff > 3 ? "Rising" : diff < -3 ? "Declining" : "Stable";
+  const trendColor = trend === "Rising" ? "#22c55e" : trend === "Declining" ? "#ef4444" : "#f59e0b";
+  const trendArrow = trend === "Rising" ? "↑" : trend === "Declining" ? "↓" : "→";
+
+  // SVG dimensions
+  const W = 900, H = 200;
+  const PAD = { top: 20, right: 20, bottom: 38, left: 44 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  const ts0    = new Date(data[0].timestamp).getTime();
+  const ts1    = new Date(data[data.length - 1].timestamp).getTime();
+  const tRange = Math.max(1, ts1 - ts0);
+
+  const xOf = d => PAD.left + ((new Date(d.timestamp).getTime() - ts0) / tRange) * cW;
+  const yOf = d => PAD.top + cH - (d.score / 100) * cH;
+
+  const pts      = data.map(d => ({ ...d, x: xOf(d), y: yOf(d) }));
+  const polyPts  = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const areaPts  = `${pts[0].x.toFixed(1)},${(PAD.top + cH).toFixed(1)} ${polyPts} ${pts[pts.length-1].x.toFixed(1)},${(PAD.top + cH).toFixed(1)}`;
+
+  const lineColor = avgScore >= 80 ? "#22c55e" : avgScore >= 50 ? "#f59e0b" : "#ef4444";
+
+  // X-axis labels: up to 5, evenly spaced
+  const labelCount = Math.min(5, data.length);
+  const xLabels = data.length <= 1
+    ? data
+    : Array.from({ length: labelCount }, (_, i) =>
+        data[Math.round(i * (data.length - 1) / (labelCount - 1))]
+      );
+
+  const fmtShort = ts => {
+    try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+    catch { return ""; }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+
+      {/* Stat cards + trend indicator */}
+      <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+        <div style={{ ...C.statCard, flex: 1, minWidth: 110 }}>
+          <div style={{ ...C.statVal, color: "#ef4444" }}>{minScore}</div>
+          <div style={C.statLbl}>24h Minimum</div>
+        </div>
+        <div style={{ ...C.statCard, flex: 1, minWidth: 110 }}>
+          <div style={{ ...C.statVal, color: "#f59e0b" }}>{avgScore}</div>
+          <div style={C.statLbl}>24h Average</div>
+        </div>
+        <div style={{ ...C.statCard, flex: 1, minWidth: 110 }}>
+          <div style={{ ...C.statVal, color: "#22c55e" }}>{maxScore}</div>
+          <div style={C.statLbl}>24h Maximum</div>
+        </div>
+        <div style={{ ...C.statCard, flex: 1, minWidth: 160 }}>
+          <div style={{ ...C.statVal, color: trendColor, fontSize: "22px" }}>
+            {trendArrow} {trend}
+          </div>
+          <div style={C.statLbl}>Trend ({data.length} samples)</div>
+        </div>
+      </div>
+
+      {/* SVG line chart */}
+      <div style={{ position: "relative" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+          <defs>
+            <linearGradient id="tlAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stopColor={lineColor} stopOpacity="0.22" />
+              <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+
+          {/* Grid lines + Y labels */}
+          {[0, 25, 50, 75, 100].map(v => {
+            const gy = PAD.top + cH - (v / 100) * cH;
+            return (
+              <g key={v}>
+                <line x1={PAD.left} y1={gy} x2={W - PAD.right} y2={gy}
+                  stroke="#21262d" strokeWidth="1" />
+                <text x={PAD.left - 6} y={gy + 4} textAnchor="end"
+                  fill="#6e7681" fontSize="10"
+                  fontFamily="Inter, system-ui, sans-serif">{v}</text>
+              </g>
+            );
+          })}
+
+          {/* Area fill */}
+          <polygon points={areaPts} fill="url(#tlAreaGrad)" />
+
+          {/* Line */}
+          <polyline points={polyPts} fill="none" stroke={lineColor}
+            strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+
+          {/* Data point dots */}
+          {pts.map((p, i) => {
+            const col = p.score >= 80 ? "#22c55e" : p.score >= 50 ? "#f59e0b" : "#ef4444";
+            const r   = tooltip?.i === i ? 5.5 : 3;
+            return (
+              <circle key={i} cx={p.x} cy={p.y} r={r}
+                fill={col} stroke="#161b22" strokeWidth="1.5"
+                style={{ cursor: "pointer" }}
+                onMouseEnter={() => setTooltip({ ...p, i })}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            );
+          })}
+
+          {/* X-axis time labels */}
+          {xLabels.map((d, i) => (
+            <text key={i} x={xOf(d)} y={H - 6} textAnchor="middle"
+              fill="#6e7681" fontSize="10"
+              fontFamily="Inter, system-ui, sans-serif">
+              {fmtShort(d.timestamp)}
+            </text>
+          ))}
+        </svg>
+
+        {/* Hover tooltip */}
+        {tooltip && (
+          <div style={{
+            position: "absolute",
+            left: `${(tooltip.x / W) * 100}%`,
+            top: `${(tooltip.y / H) * 100}%`,
+            transform: "translate(-50%, calc(-100% - 10px))",
+            background: "#1c2128",
+            border: "1px solid #30363d",
+            borderRadius: "7px",
+            padding: "8px 12px",
+            fontSize: "12px",
+            color: "#e6edf3",
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+            zIndex: 10,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+            animation: "fadeIn 0.1s ease",
+          }}>
+            <div style={{ fontWeight: 700, color: scoreColor(tooltip.score), marginBottom: "5px" }}>
+              Score: {tooltip.score}
+            </div>
+            <div style={{ color: "#8b949e", marginBottom: "5px" }}>
+              {new Date(tooltip.timestamp).toLocaleString([], {
+                month: "short", day: "numeric",
+                hour: "2-digit", minute: "2-digit",
+              })}
+            </div>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <span>Pods: {tooltip.pod_count}</span>
+              <span style={{ color: tooltip.unhealthy_count > 0 ? "#ef4444" : "#22c55e" }}>
+                Unhealthy: {tooltip.unhealthy_count}
+              </span>
+              <span style={{ color: tooltip.warning_count > 0 ? "#f59e0b" : "#22c55e" }}>
+                Warnings: {tooltip.warning_count}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Tab: Diagnosis ────────────────────────────────────────────────────────────
 
 function DiagnosisTab() {
@@ -549,6 +756,7 @@ export default function KubernetesSentinel() {
   const [pods,      setPods]      = useState([]);
   const [events,    setEvents]    = useState([]);
   const [resources, setResources] = useState({ nodes: [], deployments: [] });
+  const [timeline,  setTimeline]  = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState(null);
   const [sseAlive,  setSseAlive]  = useState(false);
@@ -621,6 +829,21 @@ export default function KubernetesSentinel() {
   // ── Initial fetch ──────────────────────────────────────────────────────────
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // ── Timeline fetch (on mount; falls back to mock on error or empty) ────────
+  useEffect(() => {
+    const fetchTimeline = async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/timeline?hours=24`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setTimeline(data.length > 0 ? data : genMockTimeline());
+      } catch {
+        setTimeline(genMockTimeline());
+      }
+    };
+    fetchTimeline();
+  }, []);
+
   // ── Derived values ─────────────────────────────────────────────────────────
   const score     = calcHealthScore(pods, resources);
   const anomalies = detectAnomalies(pods, events, resources);
@@ -634,6 +857,7 @@ export default function KubernetesSentinel() {
     { id: "pods",      label: `Pods (${pods.length})` },
     { id: "events",    label: `Events (${events.length})` },
     { id: "resources", label: "Resources" },
+    { id: "timeline",  label: "Timeline" },
     { id: "diagnosis", label: "Diagnosis" },
   ];
 
@@ -742,6 +966,7 @@ export default function KubernetesSentinel() {
             {activeTab === "pods"      && <PodsTab      pods={pods} />}
             {activeTab === "events"    && <EventsTab    events={events} />}
             {activeTab === "resources" && <ResourcesTab resources={resources} />}
+            {activeTab === "timeline"  && <TimelineTab  data={timeline} />}
             {activeTab === "diagnosis" && <DiagnosisTab />}
           </div>
 

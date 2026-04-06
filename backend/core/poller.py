@@ -18,6 +18,9 @@ DEV_MODE: bool = os.environ.get("DEV_MODE", "false").strip().lower() == "true"
 if not DEV_MODE:
     from core.k8s_client import get_apps_v1, get_core_v1
 
+from core.anomaly import detect_anomalies as _detect_anomalies
+from core.database import init_db, insert_snapshot
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -37,6 +40,30 @@ _stop_event = threading.Event()
 _thread: threading.Thread | None = None
 
 POLL_INTERVAL = 15  # seconds
+
+
+# ---------------------------------------------------------------------------
+# Health score (mirrors calcHealthScore in sentinel.jsx)
+# ---------------------------------------------------------------------------
+
+
+def _calc_health_score(pods: list[dict[str, Any]], resources: dict[str, Any]) -> int:
+    score = 100
+    for pod in pods:
+        reason = pod.get("reason") or ""
+        if reason == "CrashLoopBackOff":
+            score -= 15
+        elif pod.get("phase") not in ("Running", "Succeeded"):
+            score -= 8
+        rc = pod.get("restart_count", 0)
+        if rc >= 10:
+            score -= 10
+        elif rc >= 3:
+            score -= 5
+    for node in resources.get("nodes", []):
+        if not node.get("ready", True):
+            score -= 20
+    return max(0, min(100, score))
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +611,27 @@ def _poll_loop() -> None:
                 len(events),
                 len(resources.get("nodes", [])),
             )
+
+            try:
+                score = _calc_health_score(pods, resources)
+                pod_count = len(pods)
+                unhealthy_count = sum(
+                    1 for p in pods
+                    if "CrashLoopBackOff" in (p.get("reason") or "")
+                    or p.get("restart_count", 0) >= 3
+                )
+                warning_count = sum(
+                    1 for e in events if e.get("type") == "Warning"
+                )
+                anomaly_count = len(
+                    _detect_anomalies(
+                        {"pods": pods, "events": events, "resources": resources}
+                    )
+                )
+                insert_snapshot(score, pod_count, unhealthy_count, warning_count, anomaly_count)
+            except Exception:
+                logger.exception("Failed to persist health snapshot")
+
         except Exception:
             logger.exception("Error during cluster poll — will retry")
 
@@ -606,6 +654,7 @@ def start_poller() -> None:
     if _thread and _thread.is_alive():
         return
     _stop_event.clear()
+    init_db()
     dev = os.environ.get("DEV_MODE", "false").strip().lower() == "true"
     if dev:
         cluster_state["pods"] = _MOCK_PODS
