@@ -4,7 +4,21 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
-## [1.1.0] - 2026-04-06
+## [Unreleased]
+
+### Planned
+- Docker image published to GitHub Container Registry (ghcr.io)
+  - Automated build via GitHub Actions on every push to main
+  - Multi-arch image (amd64 + arm64) for broad cluster compatibility
+  - Image tagged by version and latest
+  - k8s/deployment.yaml updated to pull from ghcr.io/OsamaOracle/k8s-sentinel
+- Slack and Teams alerting
+- Pod log viewer inline in dashboard
+- Multi-cluster support
+
+---
+
+## [1.1.0] - In Progress
 
 ### Added
 - Historical health timeline — 24-hour sparkline graph showing cluster health score over time
