@@ -6,11 +6,15 @@ const BASE_URL = "http://localhost:8000";
 const GLOBAL_CSS = `
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #0d1117; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: #161b22; }
   ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  .log-scroll::-webkit-scrollbar { width: 5px; }
+  .log-scroll::-webkit-scrollbar-track { background: #0d1117; }
+  .log-scroll::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
 `;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -191,6 +195,34 @@ const C = {
   cmdLine: { background: "#161b22", border: "1px solid #30363d", borderRadius: "6px",
              padding: "8px 12px", fontFamily: "monospace", fontSize: "12px",
              color: "#79c0ff", marginBottom: "6px" },
+  // alert bell
+  alertBell: (active) => ({
+    display: "flex", alignItems: "center", gap: "5px", fontSize: "12px",
+    color: active ? "#22c55e" : "#6e7681", cursor: "default", position: "relative",
+  }),
+  // log drawer
+  logDrawer: {
+    position: "fixed", top: 0, right: 0, height: "100vh", width: 600,
+    background: "#0d1117", borderLeft: "1px solid #30363d",
+    zIndex: 100, display: "flex", flexDirection: "column",
+    animation: "slideInRight 0.22s ease",
+    boxShadow: "-4px 0 24px rgba(0,0,0,0.5)",
+  },
+  logDrawerHeader: {
+    display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap",
+    padding: "12px 16px", borderBottom: "1px solid #30363d",
+    background: "#161b22", flexShrink: 0,
+  },
+  logContent: {
+    flex: 1, overflow: "auto", padding: "10px 0",
+    fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+    fontSize: "12px", lineHeight: "1.6",
+  },
+  logBtn: {
+    padding: "3px 10px", borderRadius: "5px", border: "1px solid #30363d",
+    background: "rgba(88,166,255,0.08)", color: "#58a6ff", cursor: "pointer",
+    fontSize: "11px", fontWeight: 600, whiteSpace: "nowrap",
+  },
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -265,7 +297,7 @@ function EmptyRow({ cols, message }) {
 
 // ── Tab: Pods ─────────────────────────────────────────────────────────────────
 
-function PodsTab({ pods }) {
+function PodsTab({ pods, onOpenLogs }) {
   const [filter, setFilter] = useState("");
   const visible = pods.filter(p =>
     !filter || p.namespace?.includes(filter) || p.name?.includes(filter)
@@ -284,14 +316,14 @@ function PodsTab({ pods }) {
         <table style={C.tbl}>
           <thead>
             <tr>
-              {["Name", "Namespace", "Status", "Restarts", "Node"].map(h => (
+              {["Name", "Namespace", "Status", "Restarts", "Node", ""].map(h => (
                 <th key={h} style={C.th}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {visible.length === 0
-              ? <EmptyRow cols={5} message="No pods found" />
+              ? <EmptyRow cols={6} message="No pods found" />
               : visible.map(pod => (
                 <tr key={`${pod.namespace}/${pod.name}`}
                   style={{ transition: "background 0.1s" }}
@@ -304,6 +336,9 @@ function PodsTab({ pods }) {
                     {pod.restart_count ?? 0}
                   </td>
                   <td style={{ ...C.td, color: "#8b949e", fontSize: "12px" }}>{pod.node || "—"}</td>
+                  <td style={{ ...C.td }}>
+                    <button style={C.logBtn} onClick={() => onOpenLogs(pod)}>Logs</button>
+                  </td>
                 </tr>
               ))
             }
@@ -670,6 +705,118 @@ function TimelineTab({ data }) {
   );
 }
 
+// ── Log Drawer ────────────────────────────────────────────────────────────────
+
+function LogDrawer({ pod, onClose }) {
+  const [lines, setLines]         = useState(100);
+  const [previous, setPrevious]   = useState(false);
+  const [logsText, setLogsText]   = useState("");
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+
+  const fetchLogs = async (linesVal, prevVal) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const url = `${BASE_URL}/api/pods/${encodeURIComponent(pod.namespace)}/${encodeURIComponent(pod.name)}/logs?lines=${linesVal}&previous=${prevVal}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const data = await res.json();
+      setLogsText(data.logs || "");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch on mount and whenever lines/previous changes
+  useEffect(() => { fetchLogs(lines, previous); }, [pod.name, pod.namespace, lines, previous]);
+
+  const logLines = logsText.split("\n");
+
+  const lineColor = (line) => {
+    if (/ERROR|FATAL/.test(line)) return "#ef4444";
+    if (/WARN/.test(line))        return "#f59e0b";
+    if (/DEBUG/.test(line))       return "#6e7681";
+    return "#c9d1d9";
+  };
+
+  return (
+    <div style={C.logDrawer}>
+      {/* Header */}
+      <div style={C.logDrawerHeader}>
+        <span style={{ fontWeight: 700, fontSize: "13px", color: "#e6edf3", marginRight: 2 }}>
+          {pod.name}
+        </span>
+        <span style={C.pill("rgba(88,166,255,0.1)", "#58a6ff")}>{pod.namespace}</span>
+
+        <label style={{ display: "flex", alignItems: "center", gap: "5px",
+                        fontSize: "12px", color: "#8b949e", cursor: "pointer", marginLeft: 4 }}>
+          <input type="checkbox" checked={previous}
+            onChange={e => setPrevious(e.target.checked)}
+            style={{ accentColor: "#58a6ff" }} />
+          Previous container
+        </label>
+
+        <select
+          value={lines}
+          onChange={e => setLines(Number(e.target.value))}
+          style={{ background: "#0d1117", border: "1px solid #30363d", borderRadius: "5px",
+                   color: "#c9d1d9", fontSize: "12px", padding: "2px 6px", cursor: "pointer" }}>
+          {[50, 100, 200, 500].map(n => (
+            <option key={n} value={n}>{n} lines</option>
+          ))}
+        </select>
+
+        <button
+          style={{ ...C.logBtn, marginLeft: "auto" }}
+          onClick={() => fetchLogs(lines, previous)}
+          disabled={loading}>
+          {loading ? "…" : "↻ Refresh"}
+        </button>
+
+        <button
+          onClick={onClose}
+          style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer",
+                   fontSize: "18px", lineHeight: 1, padding: "0 2px" }}
+          aria-label="Close log drawer">
+          ×
+        </button>
+      </div>
+
+      {/* Log content */}
+      <div className="log-scroll" style={C.logContent}>
+        {loading && (
+          <div style={{ display: "flex", justifyContent: "center", paddingTop: 48 }}>
+            <div style={{ ...C.spinner, width: 28, height: 28,
+                          border: "2px solid #21262d", borderTop: "2px solid #58a6ff" }} />
+          </div>
+        )}
+
+        {!loading && error && (
+          <div style={{ padding: "16px 20px", color: "#fca5a5", fontSize: "13px" }}>
+            ⚠ {error}
+          </div>
+        )}
+
+        {!loading && !error && logLines.map((line, i) => (
+          <div key={i} style={{ display: "flex", gap: 0, paddingRight: 16 }}>
+            <span style={{ minWidth: 46, textAlign: "right", paddingRight: 12,
+                           color: "#484f58", userSelect: "none", flexShrink: 0,
+                           fontSize: "11px", paddingTop: "0px" }}>
+              {i + 1}
+            </span>
+            <span style={{ color: lineColor(line), whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+              {line || "\u00A0"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Tab: Diagnosis ────────────────────────────────────────────────────────────
 
 function DiagnosisTab() {
@@ -752,14 +899,17 @@ function DiagnosisTab() {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function KubernetesSentinel() {
-  const [activeTab, setActiveTab] = useState("pods");
-  const [pods,      setPods]      = useState([]);
-  const [events,    setEvents]    = useState([]);
-  const [resources, setResources] = useState({ nodes: [], deployments: [] });
-  const [timeline,  setTimeline]  = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState(null);
-  const [sseAlive,  setSseAlive]  = useState(false);
+  const [activeTab,    setActiveTab]    = useState("pods");
+  const [pods,         setPods]         = useState([]);
+  const [events,       setEvents]       = useState([]);
+  const [resources,    setResources]    = useState({ nodes: [], deployments: [] });
+  const [timeline,     setTimeline]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
+  const [sseAlive,     setSseAlive]     = useState(false);
+  const [alertStatus,  setAlertStatus]  = useState({ slack: false, teams: false, cooldown_seconds: 300 });
+  const [logDrawerPod, setLogDrawerPod] = useState(null);  // pod object or null
+  const [bellHover,    setBellHover]    = useState(false);
   const esRef = useRef(null);
 
   // ── Fetch all three endpoints in parallel ──────────────────────────────────
@@ -829,6 +979,14 @@ export default function KubernetesSentinel() {
   // ── Initial fetch ──────────────────────────────────────────────────────────
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // ── Alert status fetch ─────────────────────────────────────────────────────
+  useEffect(() => {
+    fetch(`${BASE_URL}/api/alerts/status`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setAlertStatus(d); })
+      .catch(() => {});
+  }, []);
+
   // ── Timeline fetch (on mount; falls back to mock on error or empty) ────────
   useEffect(() => {
     const fetchTimeline = async () => {
@@ -887,6 +1045,43 @@ export default function KubernetesSentinel() {
           </svg>
           <span style={C.title}>k8s-sentinel</span>
           <span style={C.badge}>DEV</span>
+
+          {/* Alert status indicator */}
+          {(() => {
+            const active = alertStatus.slack || alertStatus.teams;
+            const channels = [alertStatus.slack && "Slack", alertStatus.teams && "Teams"].filter(Boolean);
+            const tooltip = active
+              ? `Slack: ${alertStatus.slack ? "enabled" : "disabled"} / Teams: ${alertStatus.teams ? "enabled" : "disabled"}`
+              : "No alerting configured";
+            const label = active ? `Alerts: ${channels.join(" + ")}` : "Alerts: not configured";
+            return (
+              <div
+                style={{ ...C.alertBell(active), position: "relative" }}
+                onMouseEnter={() => setBellHover(true)}
+                onMouseLeave={() => setBellHover(false)}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                  stroke={active ? "#22c55e" : "#6e7681"} strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+                <span style={{ color: active ? "#22c55e" : "#6e7681" }}>{label}</span>
+                {bellHover && (
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 8px)", left: "50%",
+                    transform: "translateX(-50%)", background: "#1c2128",
+                    border: "1px solid #30363d", borderRadius: "6px",
+                    padding: "6px 10px", fontSize: "11px", color: "#c9d1d9",
+                    whiteSpace: "nowrap", zIndex: 200, pointerEvents: "none",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+                  }}>
+                    {tooltip}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div style={C.liveIndicator}>
             <span style={C.liveDot(sseAlive)} />
             <span>{sseAlive ? "Live" : "Polling"}</span>
@@ -963,7 +1158,7 @@ export default function KubernetesSentinel() {
 
           {/* Tab content */}
           <div style={C.card}>
-            {activeTab === "pods"      && <PodsTab      pods={pods} />}
+            {activeTab === "pods"      && <PodsTab      pods={pods} onOpenLogs={setLogDrawerPod} />}
             {activeTab === "events"    && <EventsTab    events={events} />}
             {activeTab === "resources" && <ResourcesTab resources={resources} />}
             {activeTab === "timeline"  && <TimelineTab  data={timeline} />}
@@ -972,6 +1167,11 @@ export default function KubernetesSentinel() {
 
         </main>
       </div>
+
+      {/* Log drawer — rendered outside main so it overlays everything */}
+      {logDrawerPod && (
+        <LogDrawer pod={logDrawerPod} onClose={() => setLogDrawerPod(null)} />
+      )}
     </>
   );
 }

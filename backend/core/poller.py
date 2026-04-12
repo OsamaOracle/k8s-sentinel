@@ -1,5 +1,6 @@
 """Background poller that refreshes cluster state every 15 seconds."""
 
+import asyncio
 import logging
 import os
 import threading
@@ -18,10 +19,13 @@ DEV_MODE: bool = os.environ.get("DEV_MODE", "false").strip().lower() == "true"
 if not DEV_MODE:
     from core.k8s_client import get_apps_v1, get_core_v1
 
+from core.alerting import AlertManager
 from core.anomaly import detect_anomalies as _detect_anomalies
 from core.database import init_db, insert_snapshot
 
 logger = logging.getLogger(__name__)
+
+alert_manager = AlertManager()
 
 # ---------------------------------------------------------------------------
 # Shared in-memory state
@@ -623,12 +627,19 @@ def _poll_loop() -> None:
                 warning_count = sum(
                     1 for e in events if e.get("type") == "Warning"
                 )
-                anomaly_count = len(
-                    _detect_anomalies(
-                        {"pods": pods, "events": events, "resources": resources}
-                    )
+                anomalies = _detect_anomalies(
+                    {"pods": pods, "events": events, "resources": resources}
                 )
+                anomaly_count = len(anomalies)
                 insert_snapshot(score, pod_count, unhealthy_count, warning_count, anomaly_count)
+
+                for anomaly in anomalies:
+                    try:
+                        asyncio.run(alert_manager.maybe_alert(anomaly))
+                    except Exception:
+                        logger.exception(
+                            "Failed to send alert for anomaly: %s", anomaly.get("label")
+                        )
             except Exception:
                 logger.exception("Failed to persist health snapshot")
 
