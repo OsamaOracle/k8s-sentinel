@@ -19,6 +19,39 @@ All notable changes to Kubernetes Sentinel are documented here.
 - RBAC audit view flagging service accounts with write access
 - Helm release tracking with version and outdated chart detection
 - GitHub Actions integration linking deployment failures to commits
+- Cost estimation per namespace based on resource requests and cloud pricing
+- Email digest with daily or weekly cluster health summary
+
+---
+
+## [1.3.0] - 2026-04-12
+
+### Added
+- Namespace filter bar above the health score row with clickable namespace pills
+- All pill selected by default showing the full cluster view
+- Active namespace filter applied simultaneously across Pods, Events, and Resources tabs
+- Namespace favorites with a star toggle on each pill
+- Favorited namespaces always float to the front of the filter bar
+- Favorites persisted in localStorage so they survive page refreshes
+- Tab counts update dynamically to reflect the currently filtered namespace
+- Diagnosis history tab showing every past AI diagnosis saved to SQLite
+- Search input on the history tab with 400ms debounce for fast filtering
+- Each history card shows timestamp, anomaly count, pod count, summary, root cause, and kubectl commands
+- Summary and kubectl command blocks are collapsible to keep the history list clean
+- Re-run button on each history card that copies the focus text back to the Diagnosis tab
+- Empty state on the history tab when no diagnoses have been run yet
+- Five realistic mock history entries in DEV_MODE
+- Auto-refresh diagnosis that triggers automatically when new anomalies are detected
+- GET /api/diagnose/auto-status endpoint returning trigger state and last triggered timestamp
+- Toast notification at the bottom right when an auto-diagnosis runs in the background
+- Red badge on the Diagnosis tab label when a new auto result is available
+- Badge clears automatically when the user opens the Diagnosis tab
+- AUTO_DIAGNOSIS_INTERVAL_SECONDS env var controlling how often auto-diagnosis can fire (default 300)
+
+### Changed
+- Dashboard now has 6 tabs in this order: Pods, Events, Resources, Timeline, History, Diagnosis
+- Nodes are always shown unfiltered in the Resources tab regardless of namespace selection
+- .env.example updated with AUTO_DIAGNOSIS_INTERVAL_SECONDS
 
 ---
 
