@@ -1,5 +1,6 @@
-"""SQLite persistence for cluster health snapshots."""
+"""SQLite persistence for cluster health snapshots and diagnosis history."""
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create health_snapshots table if it does not already exist."""
+    """Create tables if they do not already exist."""
     conn = _connect()
     try:
         conn.execute(
@@ -27,6 +28,20 @@ def init_db() -> None:
                 unhealthy_count INTEGER NOT NULL,
                 warning_count   INTEGER NOT NULL,
                 anomaly_count   INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS diagnosis_history (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp        TEXT    NOT NULL,
+                focus            TEXT,
+                summary          TEXT    NOT NULL,
+                root_cause       TEXT    NOT NULL,
+                kubectl_commands TEXT    NOT NULL,
+                anomaly_count    INTEGER NOT NULL,
+                pod_count        INTEGER NOT NULL
             )
             """
         )
@@ -53,6 +68,62 @@ def insert_snapshot(
             (ts, score, pod_count, unhealthy_count, warning_count, anomaly_count),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_diagnosis(
+    focus: str | None,
+    summary: str,
+    root_cause: str,
+    kubectl_commands: list[str],
+    anomaly_count: int,
+    pod_count: int,
+) -> None:
+    """Insert a diagnosis record with the current UTC timestamp."""
+    ts = datetime.now(timezone.utc).isoformat()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO diagnosis_history "
+            "(timestamp, focus, summary, root_cause, kubectl_commands, anomaly_count, pod_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ts, focus, summary, root_cause, json.dumps(kubectl_commands), anomaly_count, pod_count),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_diagnosis_history(limit: int = 50) -> list[dict]:
+    """Return diagnosis records ordered newest first."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, timestamp, focus, summary, root_cause, kubectl_commands, "
+            "anomaly_count, pod_count "
+            "FROM diagnosis_history ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def search_diagnosis(query: str, limit: int = 50) -> list[dict]:
+    """Search diagnosis records by summary or root_cause using LIKE."""
+    like = f"%{query}%"
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, timestamp, focus, summary, root_cause, kubectl_commands, "
+            "anomaly_count, pod_count "
+            "FROM diagnosis_history "
+            "WHERE summary LIKE ? OR root_cause LIKE ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (like, like, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 

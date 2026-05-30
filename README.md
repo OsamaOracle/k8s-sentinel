@@ -351,6 +351,35 @@ Then open http://localhost:8000 in your browser or load `frontend/sentinel.jsx` 
 
 ---
 
+## Supported LLM Providers
+
+Switch providers by setting the `LLM_PROVIDER` environment variable. No code changes needed.
+
+| Provider | Value | Model | API Key Required |
+|----------|-------|-------|-----------------|
+| Anthropic Claude | `claude` | claude-sonnet-4-20250514 | ANTHROPIC_API_KEY |
+| OpenAI | `openai` | gpt-4o | OPENAI_API_KEY |
+| Google Gemini | `gemini` | gemini-1.5-pro | GOOGLE_API_KEY |
+| Ollama (local) | `ollama` | llama3 (configurable) | None |
+| Azure OpenAI | `azure` | gpt-4o (configurable) | AZURE_OPENAI_KEY |
+
+Example switching to OpenAI:
+
+```env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-openai-key
+```
+
+Example running fully local with Ollama:
+
+```env
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3
+```
+
+---
+
 ## Anomaly Detection Rules
 
 | Rule | Severity | Trigger |

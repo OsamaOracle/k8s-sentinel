@@ -9,7 +9,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 ### Planned
 - Docker image published to GitHub Container Registry (ghcr.io)
   - Automated build via GitHub Actions on every push to main
-  - Multi-arch image supporting amd64 and arm64 for broad cluster compatibility
+  - Multi-arch image supporting amd64 and arm64
   - Image tagged by version and latest
   - k8s/deployment.yaml updated to pull from ghcr.io/OsamaOracle/k8s-sentinel
 - Multi-cluster support with cluster switcher in the dashboard header
@@ -18,9 +18,32 @@ All notable changes to Kubernetes Sentinel are documented here.
 - Predictive alerting based on trend analysis before thresholds are reached
 - RBAC audit view flagging service accounts with write access
 - Helm release tracking with version and outdated chart detection
-- GitHub Actions integration linking deployment failures to commits
 - Cost estimation per namespace based on resource requests and cloud pricing
 - Email digest with daily or weekly cluster health summary
+
+---
+
+## [1.4.0] - 2026-04-12
+
+### Added
+- Multi-LLM provider support with a clean abstraction layer in core/llm.py
+- AnthropicProvider using claude-sonnet-4-20250514 (default)
+- OpenAIProvider using gpt-4o via the OpenAI chat completions API
+- GeminiProvider using gemini-1.5-pro via the Google Generative Language API
+- OllamaProvider for fully local inference with any Ollama model (default llama3)
+- AzureOpenAIProvider for enterprise deployments via Azure OpenAI Service
+- LLM_PROVIDER env var to switch providers without touching any code
+- GET /api/llm/status endpoint returning active provider, model, and configuration state
+- Color-coded provider pill in the dashboard header showing the active LLM
+- System prompt centralized in llm.py and injected correctly for each provider
+- All providers return the same structured JSON format for diagnosis results
+- Silent fallback in the frontend if the llm/status endpoint is unreachable
+
+### Changed
+- diagnosis.py no longer imports the Anthropic SDK directly
+- All LLM calls now go through the get_llm_provider() factory function
+- Error handling in diagnosis.py now catches httpx.HTTPStatusError and httpx.RequestError
+- .env.example updated with all provider variables and comments
 
 ---
 
@@ -32,24 +55,22 @@ All notable changes to Kubernetes Sentinel are documented here.
 - Active namespace filter applied simultaneously across Pods, Events, and Resources tabs
 - Namespace favorites with a star toggle on each pill
 - Favorited namespaces always float to the front of the filter bar
-- Favorites persisted in localStorage so they survive page refreshes
+- Favorites persisted in localStorage under key k8s-sentinel-favorites
 - Tab counts update dynamically to reflect the currently filtered namespace
 - Diagnosis history tab showing every past AI diagnosis saved to SQLite
 - Search input on the history tab with 400ms debounce for fast filtering
 - Each history card shows timestamp, anomaly count, pod count, summary, root cause, and kubectl commands
 - Summary and kubectl command blocks are collapsible to keep the history list clean
 - Re-run button on each history card that copies the focus text back to the Diagnosis tab
-- Empty state on the history tab when no diagnoses have been run yet
 - Five realistic mock history entries in DEV_MODE
 - Auto-refresh diagnosis that triggers automatically when new anomalies are detected
 - GET /api/diagnose/auto-status endpoint returning trigger state and last triggered timestamp
 - Toast notification at the bottom right when an auto-diagnosis runs in the background
 - Red badge on the Diagnosis tab label when a new auto result is available
-- Badge clears automatically when the user opens the Diagnosis tab
-- AUTO_DIAGNOSIS_INTERVAL_SECONDS env var controlling how often auto-diagnosis can fire (default 300)
+- AUTO_DIAGNOSIS_INTERVAL_SECONDS env var controlling how often auto-diagnosis can fire
 
 ### Changed
-- Dashboard now has 6 tabs in this order: Pods, Events, Resources, Timeline, History, Diagnosis
+- Dashboard now has 6 tabs: Pods, Events, Resources, Timeline, History, Diagnosis
 - Nodes are always shown unfiltered in the Resources tab regardless of namespace selection
 - .env.example updated with AUTO_DIAGNOSIS_INTERVAL_SECONDS
 
@@ -65,7 +86,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 - Alert status indicator in the dashboard header showing active channels
 - Pod log viewer as a slide-in drawer on the right side of the dashboard
 - GET /api/pods/{namespace}/{pod_name}/logs endpoint with line count and previous container support
-- Color-coded log lines in the viewer: red for ERROR and FATAL, amber for WARN, muted for DEBUG
+- Color-coded log lines: red for ERROR and FATAL, amber for WARN, muted for DEBUG
 - Line numbers in the log viewer for easier navigation
 - Previous container toggle to inspect logs from crashed containers
 - Line count selector allowing 50, 100, 200, or 500 lines

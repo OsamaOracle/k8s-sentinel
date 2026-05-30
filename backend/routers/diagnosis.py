@@ -1,39 +1,20 @@
-"""POST /api/diagnose — AI-powered cluster diagnosis via Claude."""
+"""POST /api/diagnose — AI-powered cluster diagnosis."""
 
 import json
 import logging
 import os
 
-import anthropic
+import httpx
 from fastapi import APIRouter, HTTPException
 
 from core.anomaly import detect_anomalies
+from core.database import insert_diagnosis
+from core.llm import get_llm_provider
 from core.poller import cluster_state
 from models.schemas import DiagnosisRequest, DiagnosisResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["diagnosis"])
-
-# Use the canonical alias for claude-sonnet-4-20250514
-_MODEL = "claude-sonnet-4-0"
-
-_SYSTEM_PROMPT = """\
-You are an expert Kubernetes Site Reliability Engineer.
-You will be given a JSON snapshot of a Kubernetes cluster's current state,
-including pods, events, detected anomalies, and resource usage.
-
-Respond ONLY with a valid JSON object (no markdown fences) with exactly these keys:
-{
-  "summary":         "<one-paragraph plain-English overview of cluster health>",
-  "rootCause":       "<most likely root cause of the most critical issue, or 'No issues detected' if healthy>",
-  "kubectlCommands": ["<cmd1>", "<cmd2>", "<cmd3>"]
-}
-
-Rules:
-- kubectlCommands must contain exactly 3 actionable kubectl commands relevant to the issues found.
-- If no issues are detected, provide 3 useful diagnostic/inspection commands anyway.
-- Do not include any text outside the JSON object.
-"""
 
 
 def _build_cluster_summary(focus: str | None = None) -> str:
@@ -78,54 +59,33 @@ async def diagnose(request: DiagnosisRequest) -> DiagnosisResponse:
             detail="Cluster state not yet available — poller may still be starting.",
         )
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="ANTHROPIC_API_KEY environment variable is not set.",
-        )
-
     cluster_json = _build_cluster_summary(focus=request.focus)
 
-    user_message = f"Analyse this Kubernetes cluster state and respond with the JSON schema described in the system prompt.\n\n{cluster_json}"
+    prompt = f"Analyse this Kubernetes cluster state and respond with the JSON schema described in the system prompt.\n\n{cluster_json}"
     if request.extra_context:
-        user_message += f"\n\nAdditional context:\n{json.dumps(request.extra_context, indent=2)}"
-
-    client = anthropic.Anthropic(api_key=api_key)
+        prompt += f"\n\nAdditional context:\n{json.dumps(request.extra_context, indent=2)}"
 
     try:
-        # Use streaming to prevent timeouts on large cluster payloads
-        with client.messages.stream(
-            model=_MODEL,
-            max_tokens=1024,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        ) as stream:
-            response = stream.get_final_message()
-
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=500, detail="Invalid Anthropic API key.")
-    except anthropic.RateLimitError:
-        raise HTTPException(status_code=429, detail="Anthropic rate limit reached — try again later.")
-    except anthropic.APIStatusError as exc:
-        logger.error("Anthropic API error %s: %s", exc.status_code, exc.message)
-        raise HTTPException(status_code=502, detail=f"Anthropic API error: {exc.message}")
-    except anthropic.APIConnectionError as exc:
-        logger.error("Anthropic connection error: %s", exc)
-        raise HTTPException(status_code=502, detail="Could not reach Anthropic API.")
-
-    # Extract text content
-    text_content = next(
-        (block.text for block in response.content if block.type == "text"), ""
-    )
+        provider = get_llm_provider()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
     try:
-        data = json.loads(text_content)
+        response_text = await provider.diagnose(prompt)
+    except httpx.HTTPStatusError as exc:
+        logger.error("LLM API error %s", exc.response.status_code)
+        raise HTTPException(status_code=502, detail=f"LLM API error: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        logger.error("LLM connection error: %s", exc)
+        raise HTTPException(status_code=502, detail="Could not reach LLM API.")
+
+    try:
+        data = json.loads(response_text)
     except json.JSONDecodeError:
-        logger.error("Claude returned non-JSON response: %s", text_content[:500])
+        logger.error("LLM returned non-JSON response: %s", response_text[:500])
         raise HTTPException(
             status_code=502,
-            detail="Claude returned an unexpected response format.",
+            detail="LLM returned an unexpected response format.",
         )
 
     # Validate required keys
@@ -141,8 +101,38 @@ async def diagnose(request: DiagnosisRequest) -> DiagnosisResponse:
         kubectl_cmds = [str(kubectl_cmds)]
     kubectl_cmds = kubectl_cmds[:3]  # Enforce maximum of 3
 
+    # Persist to history
+    try:
+        anomalies = detect_anomalies(cluster_state)
+        pods = cluster_state.get("pods", [])
+        insert_diagnosis(
+            focus=request.focus,
+            summary=data["summary"],
+            root_cause=data["rootCause"],
+            kubectl_commands=kubectl_cmds,
+            anomaly_count=len(anomalies),
+            pod_count=len(pods),
+        )
+    except Exception:
+        logger.exception("Failed to persist diagnosis to history")
+
     return DiagnosisResponse(
         summary=data["summary"],
         rootCause=data["rootCause"],
         kubectlCommands=kubectl_cmds,
     )
+
+
+@router.get("/diagnose/auto-status")
+async def auto_diagnosis_status() -> dict:
+    """Return the current auto-diagnosis trigger state."""
+    trigger = cluster_state.get(
+        "auto_diagnosis_trigger",
+        {"should_trigger": False, "triggered_at": None, "anomaly_snapshot": []},
+    )
+    anomalies = detect_anomalies(cluster_state)
+    return {
+        "should_trigger": trigger.get("should_trigger", False),
+        "last_triggered_at": trigger.get("triggered_at"),
+        "anomaly_count": len(anomalies),
+    }

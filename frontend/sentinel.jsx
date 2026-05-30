@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 const BASE_URL = "http://localhost:8000";
+const DEV_MODE = true;
 
 // ── CSS keyframes injected once ───────────────────────────────────────────────
 const GLOBAL_CSS = `
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
+  @keyframes slideInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #0d1117; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -200,6 +202,57 @@ const C = {
     display: "flex", alignItems: "center", gap: "5px", fontSize: "12px",
     color: active ? "#22c55e" : "#6e7681", cursor: "default", position: "relative",
   }),
+  // namespace filter bar
+  nsBar: { display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center",
+           marginBottom: "18px" },
+  nsLabel: { fontSize: "11px", fontWeight: 700, color: "#8b949e",
+             textTransform: "uppercase", letterSpacing: "0.6px", marginRight: "4px" },
+  nsPill: (active) => ({
+    padding: "3px 12px", borderRadius: "12px", border: "1px solid",
+    background: active ? "#1f6feb" : "transparent",
+    borderColor: active ? "#1f6feb" : "#30363d",
+    color: active ? "#fff" : "#8b949e",
+    cursor: "pointer", fontSize: "12px", fontWeight: 600,
+    transition: "all 0.15s",
+  }),
+  nsPillLeft: (active) => ({
+    padding: "3px 10px", borderRadius: "12px 0 0 12px", border: "1px solid",
+    borderRight: "none",
+    background: active ? "#1f6feb" : "transparent",
+    borderColor: active ? "#1f6feb" : "#30363d",
+    color: active ? "#fff" : "#8b949e",
+    cursor: "pointer", fontSize: "12px", fontWeight: 600,
+    transition: "all 0.15s",
+  }),
+  nsStar: (active, fav) => ({
+    padding: "3px 8px", borderRadius: "0 12px 12px 0", border: "1px solid",
+    background: active ? "#1f6feb" : "transparent",
+    borderColor: active ? "#1f6feb" : "#30363d",
+    color: fav ? "#f59e0b" : active ? "rgba(255,255,255,0.5)" : "#484f58",
+    cursor: "pointer", fontSize: "13px", lineHeight: 1,
+    display: "flex", alignItems: "center", transition: "all 0.15s",
+  }),
+  // toast
+  toast: {
+    position: "fixed", bottom: "24px", right: "24px",
+    background: "#1f6feb", color: "#fff", padding: "12px 20px",
+    borderRadius: "8px", fontSize: "13px", fontWeight: 600,
+    animation: "slideInUp 0.25s ease",
+    zIndex: 500, boxShadow: "0 4px 18px rgba(0,0,0,0.5)",
+    maxWidth: "320px",
+  },
+  // history
+  histCard: { background: "#0d1117", border: "1px solid #30363d", borderRadius: "8px",
+              padding: "14px 16px", marginBottom: "10px" },
+  histMeta: { display: "flex", justifyContent: "space-between", alignItems: "center",
+              marginBottom: "8px", flexWrap: "wrap", gap: "6px" },
+  histTime: { fontSize: "12px", color: "#6e7681" },
+  histExpand: { background: "none", border: "none", color: "#58a6ff", cursor: "pointer",
+                fontSize: "11px", padding: "2px 0", marginTop: "2px" },
+  histRootCause: { fontSize: "12px", color: "#f59e0b", marginTop: "8px", lineHeight: 1.5 },
+  histCmdToggle: { background: "none", border: "1px solid #30363d", borderRadius: "5px",
+                   color: "#8b949e", cursor: "pointer", fontSize: "11px",
+                   padding: "3px 10px", marginTop: "8px" },
   // log drawer
   logDrawer: {
     position: "fixed", top: 0, right: 0, height: "100vh", width: 600,
@@ -817,13 +870,246 @@ function LogDrawer({ pod, onClose }) {
   );
 }
 
+// ── Mock History Data (DEV_MODE) ──────────────────────────────────────────────
+
+const MOCK_HISTORY = [
+  {
+    id: 1,
+    timestamp: "2026-04-23T08:15:00+00:00",
+    focus: "ml-pipeline pods are failing",
+    summary: "The cluster is experiencing critical issues in the ml-pipeline namespace. The model-trainer pod is stuck in CrashLoopBackOff with 4 restarts. The primary cause appears to be a missing PVC mount at /mnt/disks/model-weights. Additionally, node-02 is in NotReady state which is affecting workload scheduling across two namespaces.",
+    root_cause: "PVC mount failure for model-weights volume combined with node-02 NotReady state causing cascading failures in ml-pipeline namespace.",
+    kubectl_commands: JSON.stringify([
+      "kubectl describe pod model-trainer-9a1b2c-t7w8x -n ml-pipeline",
+      "kubectl get pvc -n ml-pipeline",
+      "kubectl describe node node-02",
+    ]),
+    anomaly_count: 4,
+    pod_count: 6,
+  },
+  {
+    id: 2,
+    timestamp: "2026-04-23T06:00:00+00:00",
+    focus: null,
+    summary: "Cluster health is degraded due to memory pressure in the data namespace. The etl-processor pod has been OOMKilled 5 times, consistently exceeding its 512Mi memory limit. CPU throttling on prometheus-server at 75% indicates resource constraints. All other namespaces are operating normally.",
+    root_cause: "Memory limit for etl-processor is insufficient for current workload — container is consistently exceeding its 512Mi limit.",
+    kubectl_commands: JSON.stringify([
+      "kubectl top pod -n data",
+      "kubectl describe pod etl-processor-6b7c9d-r2n5v -n data",
+      "kubectl get events -n data --sort-by=.lastTimestamp",
+    ]),
+    anomaly_count: 3,
+    pod_count: 6,
+  },
+  {
+    id: 3,
+    timestamp: "2026-04-22T22:30:00+00:00",
+    focus: "ingress not routing traffic",
+    summary: "Cluster is generally healthy with minor warnings. The nginx-ingress-controller successfully pulled image 3.4.3 and restarted. A brief connectivity disruption during the rollout lasted approximately 45 seconds. All 6 pods are now running and the ingress controller is handling traffic normally.",
+    root_cause: "Planned image update for nginx-ingress-controller caused a brief traffic disruption during the pod restart sequence.",
+    kubectl_commands: JSON.stringify([
+      "kubectl rollout status deployment/nginx-ingress-controller -n ingress-nginx",
+      "kubectl logs -n ingress-nginx -l app=nginx-ingress-controller --tail=50",
+      "kubectl get ingress --all-namespaces",
+    ]),
+    anomaly_count: 1,
+    pod_count: 6,
+  },
+  {
+    id: 4,
+    timestamp: "2026-04-22T14:45:00+00:00",
+    focus: null,
+    summary: "Production namespace experiencing volume mount failures. The web-frontend pod is unable to attach the config-volume ConfigMap, causing application startup delays. The ConfigMap cache sync timed out waiting for the condition. The pod is running but may be serving stale configuration.",
+    root_cause: "ConfigMap cache synchronization timeout preventing config-volume mount in the web-frontend pod.",
+    kubectl_commands: JSON.stringify([
+      "kubectl get configmap -n production",
+      "kubectl describe pod web-frontend-5c8d4a-p9m3q -n production",
+      "kubectl rollout restart deployment/web-frontend -n production",
+    ]),
+    anomaly_count: 2,
+    pod_count: 6,
+  },
+  {
+    id: 5,
+    timestamp: "2026-04-22T09:00:00+00:00",
+    focus: "api-gateway scaling",
+    summary: "The api-gateway deployment in the openclaw namespace was scaled up from 2 to 3 replicas in response to increased load. All 3 replicas are healthy and accepting traffic. Health score is at 85 — the highest point in the past 24 hours. No critical anomalies detected across any namespace.",
+    root_cause: "No issues detected — scale-up event was intentional and completed successfully.",
+    kubectl_commands: JSON.stringify([
+      "kubectl get deployment api-gateway -n openclaw",
+      "kubectl top pods -n openclaw",
+      "kubectl get hpa -n openclaw",
+    ]),
+    anomaly_count: 0,
+    pod_count: 6,
+  },
+];
+
+// ── Tab: History ──────────────────────────────────────────────────────────────
+
+function fmtHistoryTime(ts) {
+  if (!ts) return "—";
+  try {
+    return new Date(ts).toLocaleString([], {
+      month: "short", day: "numeric", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch { return String(ts); }
+}
+
+function HistoryCard({ item, onRerun }) {
+  const [expanded, setExpanded] = useState(false);
+  const [cmdOpen,   setCmdOpen]  = useState(false);
+
+  const cmds = (() => {
+    try {
+      return typeof item.kubectl_commands === "string"
+        ? JSON.parse(item.kubectl_commands)
+        : item.kubectl_commands || [];
+    } catch { return []; }
+  })();
+
+  return (
+    <div style={C.histCard}>
+      <div style={C.histMeta}>
+        <span style={C.histTime}>{fmtHistoryTime(item.timestamp)}</span>
+        <div style={{ display: "flex", gap: "6px" }}>
+          <span style={C.pill("rgba(239,68,68,0.15)", "#ef4444")}>
+            {item.anomaly_count} anomal{item.anomaly_count === 1 ? "y" : "ies"}
+          </span>
+          <span style={C.pill("rgba(88,166,255,0.1)", "#58a6ff")}>
+            {item.pod_count} pods
+          </span>
+        </div>
+      </div>
+
+      {item.focus && (
+        <div style={{ fontSize: "11px", color: "#58a6ff", marginBottom: "6px" }}>
+          Focus: {item.focus}
+        </div>
+      )}
+
+      <div>
+        <p style={{
+          fontSize: "13px", color: "#c9d1d9", lineHeight: 1.6,
+          overflow: "hidden",
+          display: "-webkit-box",
+          WebkitLineClamp: expanded ? "unset" : 2,
+          WebkitBoxOrient: "vertical",
+        }}>
+          {item.summary}
+        </p>
+        <button style={C.histExpand} onClick={() => setExpanded(v => !v)}>
+          {expanded ? "Show less ▲" : "Show more ▼"}
+        </button>
+      </div>
+
+      <div style={C.histRootCause}>
+        Root cause: {item.root_cause}
+      </div>
+
+      <div>
+        <button style={C.histCmdToggle} onClick={() => setCmdOpen(v => !v)}>
+          kubectl commands {cmdOpen ? "▲" : "▼"}
+        </button>
+        {cmdOpen && (
+          <div style={{ marginTop: "8px" }}>
+            {cmds.map((cmd, i) => (
+              <div key={i} style={C.cmdLine}>$ {cmd}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: "12px" }}>
+        <button style={C.diagBtn(false)} onClick={() => onRerun(item.focus || "")}>
+          Re-run
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HistoryTab({ onRerun }) {
+  const [search,  setSearch]  = useState("");
+  const [results, setResults] = useState(DEV_MODE ? MOCK_HISTORY : []);
+  const [loading, setLoading] = useState(false);
+  const debounceRef = useRef(null);
+
+  const fetchHistory = useCallback(async (q) => {
+    setLoading(true);
+    try {
+      const qs = q ? `&search=${encodeURIComponent(q)}` : "";
+      const res = await fetch(`${BASE_URL}/api/history?limit=50${qs}`);
+      if (res.ok) setResults(await res.json());
+    } catch {} finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!DEV_MODE) fetchHistory("");
+  }, [fetchHistory]);
+
+  const handleSearch = (val) => {
+    setSearch(val);
+    if (DEV_MODE) return; // client-side filter handles it in dev
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchHistory(val), 400);
+  };
+
+  // In DEV_MODE, filter mock data client-side
+  const visible = DEV_MODE && search
+    ? results.filter(r =>
+        r.summary.toLowerCase().includes(search.toLowerCase()) ||
+        r.root_cause.toLowerCase().includes(search.toLowerCase())
+      )
+    : results;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      <input
+        style={{ ...C.diagInput, maxWidth: 420, marginBottom: "4px" }}
+        placeholder="Search past diagnoses…"
+        value={search}
+        onChange={e => handleSearch(e.target.value)}
+      />
+
+      {loading && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "32px 0" }}>
+          <div style={{ ...C.spinner, width: 28, height: 28,
+                        border: "2px solid #21262d", borderTop: "2px solid #58a6ff" }} />
+        </div>
+      )}
+
+      {!loading && visible.length === 0 && (
+        <div style={{ textAlign: "center", color: "#8b949e", padding: "48px 0", fontSize: "14px" }}>
+          No diagnosis history yet. Run your first diagnosis from the Diagnosis tab.
+        </div>
+      )}
+
+      {!loading && visible.map(item => (
+        <HistoryCard key={item.id} item={item} onRerun={onRerun} />
+      ))}
+    </div>
+  );
+}
+
 // ── Tab: Diagnosis ────────────────────────────────────────────────────────────
 
-function DiagnosisTab() {
-  const [focus, setFocus]         = useState("");
-  const [result, setResult]       = useState(null);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState(null);
+function DiagnosisTab({ focusHint, externalResult }) {
+  const [focus,   setFocus]   = useState(focusHint || "");
+  const [result,  setResult]  = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
+
+  // Sync when parent sets a new focus hint (e.g. History re-run)
+  useEffect(() => {
+    if (focusHint !== undefined && focusHint !== null) setFocus(focusHint);
+  }, [focusHint]);
+
+  // Show external (auto-diagnosis) result when no user result is present
+  const displayResult = result ?? externalResult ?? null;
 
   const runDiagnosis = async () => {
     setLoading(true);
@@ -874,19 +1160,24 @@ function DiagnosisTab() {
         </div>
       </div>
 
-      {result && (
+      {displayResult && (
         <div style={C.diagResultCard}>
+          {externalResult && !result && (
+            <div style={{ fontSize: "11px", color: "#58a6ff", marginBottom: "10px", fontWeight: 600 }}>
+              Auto-diagnosis result
+            </div>
+          )}
           <div style={C.diagSection}>
             <div style={C.diagSectionTitle}>Summary</div>
-            <p style={C.diagText}>{result.summary}</p>
+            <p style={C.diagText}>{displayResult.summary}</p>
           </div>
           <div style={C.diagSection}>
             <div style={C.diagSectionTitle}>Root Cause</div>
-            <p style={{ ...C.diagText, color: "#fca5a5" }}>{result.rootCause}</p>
+            <p style={{ ...C.diagText, color: "#fca5a5" }}>{displayResult.rootCause}</p>
           </div>
           <div>
             <div style={C.diagSectionTitle}>Remediation Commands</div>
-            {(result.kubectlCommands || []).map((cmd, i) => (
+            {(displayResult.kubectlCommands || []).map((cmd, i) => (
               <div key={i} style={C.cmdLine}>$ {cmd}</div>
             ))}
           </div>
@@ -908,9 +1199,28 @@ export default function KubernetesSentinel() {
   const [error,        setError]        = useState(null);
   const [sseAlive,     setSseAlive]     = useState(false);
   const [alertStatus,  setAlertStatus]  = useState({ slack: false, teams: false, cooldown_seconds: 300 });
-  const [logDrawerPod, setLogDrawerPod] = useState(null);  // pod object or null
+  const [logDrawerPod, setLogDrawerPod] = useState(null);
   const [bellHover,    setBellHover]    = useState(false);
-  const esRef = useRef(null);
+  const [llmStatus,    setLlmStatus]    = useState(null);
+
+  // Namespace filter state
+  const [activeNs,  setActiveNs]  = useState("All");
+  const [favorites, setFavorites] = useState(() => {
+    try {
+      const saved = localStorage.getItem("k8s-sentinel-favorites");
+      return new Set(saved ? JSON.parse(saved) : []);
+    } catch { return new Set(); }
+  });
+
+  // Diagnosis / auto-refresh state
+  const [diagFocusHint, setDiagFocusHint] = useState("");
+  const [autoResult,    setAutoResult]    = useState(null);
+  const [autoNewBadge,  setAutoNewBadge]  = useState(false);
+  const [autoToast,     setAutoToast]     = useState(false);
+
+  const esRef       = useRef(null);
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
 
   // ── Fetch all three endpoints in parallel ──────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -987,6 +1297,14 @@ export default function KubernetesSentinel() {
       .catch(() => {});
   }, []);
 
+  // ── LLM provider status fetch ──────────────────────────────────────────────
+  useEffect(() => {
+    fetch(`${BASE_URL}/api/llm/status`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setLlmStatus(d); })
+      .catch(() => {});
+  }, []);
+
   // ── Timeline fetch (on mount; falls back to mock on error or empty) ────────
   useEffect(() => {
     const fetchTimeline = async () => {
@@ -1002,6 +1320,57 @@ export default function KubernetesSentinel() {
     fetchTimeline();
   }, []);
 
+  // ── Auto-diagnosis polling (every 60 s) ───────────────────────────────────
+  useEffect(() => {
+    if (DEV_MODE) return; // skip in dev
+    const runAutoCheck = async () => {
+      try {
+        const statusRes = await fetch(`${BASE_URL}/api/diagnose/auto-status`);
+        if (!statusRes.ok) return;
+        const status = await statusRes.json();
+        if (!status.should_trigger) return;
+
+        const onDiagTab = activeTabRef.current === "diagnosis";
+        if (!onDiagTab) {
+          setAutoToast(true);
+          setTimeout(() => setAutoToast(false), 4000);
+        }
+
+        const diagRes = await fetch(`${BASE_URL}/api/diagnose`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ focus: null }),
+        });
+        if (diagRes.ok) {
+          const result = await diagRes.json();
+          setAutoResult(result);
+          if (!onDiagTab) setAutoNewBadge(true);
+        }
+      } catch {}
+    };
+
+    const id = setInterval(runAutoCheck, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Namespace helpers ─────────────────────────────────────────────────────
+  const namespaces = useMemo(() => {
+    const nsSet = new Set(pods.map(p => p.namespace).filter(Boolean));
+    return [...nsSet].sort((a, b) => {
+      const aFav = favorites.has(a), bFav = favorites.has(b);
+      if (aFav && !bFav) return -1;
+      if (!aFav && bFav) return 1;
+      return a.localeCompare(b);
+    });
+  }, [pods, favorites]);
+
+  const toggleFavorite = (ns) => {
+    const next = new Set(favorites);
+    next.has(ns) ? next.delete(ns) : next.add(ns);
+    setFavorites(next);
+    try { localStorage.setItem("k8s-sentinel-favorites", JSON.stringify([...next])); } catch {}
+  };
+
   // ── Derived values ─────────────────────────────────────────────────────────
   const score     = calcHealthScore(pods, resources);
   const anomalies = detectAnomalies(pods, events, resources);
@@ -1011,12 +1380,23 @@ export default function KubernetesSentinel() {
     (p.reason || "").includes("CrashLoopBackOff") || p.restart_count >= 3
   ).length;
 
+  // ── Namespace-filtered data ────────────────────────────────────────────────
+  const filteredPods = activeNs === "All" ? pods : pods.filter(p => p.namespace === activeNs);
+  const filteredEvents = activeNs === "All" ? events : events.filter(e => e.namespace === activeNs);
+  const filteredResources = {
+    nodes: resources.nodes, // always show all nodes
+    deployments: activeNs === "All"
+      ? resources.deployments
+      : resources.deployments.filter(d => d.namespace === activeNs),
+  };
+
   const TABS = [
-    { id: "pods",      label: `Pods (${pods.length})` },
-    { id: "events",    label: `Events (${events.length})` },
+    { id: "pods",      label: `Pods (${filteredPods.length})` },
+    { id: "events",    label: `Events (${filteredEvents.length})` },
     { id: "resources", label: "Resources" },
     { id: "timeline",  label: "Timeline" },
-    { id: "diagnosis", label: "Diagnosis" },
+    { id: "history",   label: "History" },
+    { id: "diagnosis", label: autoNewBadge ? "Diagnosis 🔴" : "Diagnosis" },
   ];
 
   // ── Loading screen ─────────────────────────────────────────────────────────
@@ -1083,6 +1463,24 @@ export default function KubernetesSentinel() {
           })()}
 
           <div style={C.liveIndicator}>
+            {llmStatus && (() => {
+              const PC = {
+                claude: { bg: "rgba(139,92,246,0.15)", fg: "#a78bfa", label: "Claude" },
+                openai: { bg: "rgba(34,197,94,0.15)",  fg: "#22c55e", label: "GPT-4o" },
+                gemini: { bg: "rgba(59,130,246,0.15)", fg: "#60a5fa", label: "Gemini" },
+                ollama: { bg: "rgba(245,158,11,0.15)", fg: "#f59e0b", label: "Ollama" },
+                azure:  { bg: "rgba(59,130,246,0.15)", fg: "#60a5fa", label: "Azure"  },
+              };
+              const c = PC[llmStatus.provider] || { bg: "rgba(110,118,129,0.15)", fg: "#8b949e", label: llmStatus.provider };
+              const modelLabel = llmStatus.provider === "ollama" ? "local" : llmStatus.model;
+              return (
+                <>
+                  <span style={C.pill(c.bg, c.fg)}>{c.label}</span>
+                  <span style={{ fontSize: "11px", color: "#6e7681" }}>{modelLabel}</span>
+                  <span style={{ color: "#30363d", margin: "0 2px" }}>|</span>
+                </>
+              );
+            })()}
             <span style={C.liveDot(sseAlive)} />
             <span>{sseAlive ? "Live" : "Polling"}</span>
           </div>
@@ -1097,6 +1495,29 @@ export default function KubernetesSentinel() {
               <button style={C.retryBtn} onClick={fetchAll}>Retry</button>
             </div>
           )}
+
+          {/* Namespace filter bar */}
+          <div style={C.nsBar}>
+            <span style={C.nsLabel}>Namespace</span>
+            <button style={C.nsPill(activeNs === "All")} onClick={() => setActiveNs("All")}>
+              All
+            </button>
+            {namespaces.map(ns => (
+              <div key={ns} style={{ display: "inline-flex" }}>
+                <button
+                  style={C.nsPillLeft(activeNs === ns)}
+                  onClick={() => setActiveNs(ns)}>
+                  {ns}
+                </button>
+                <button
+                  style={C.nsStar(activeNs === ns, favorites.has(ns))}
+                  onClick={() => toggleFavorite(ns)}
+                  title={favorites.has(ns) ? "Remove from favorites" : "Add to favorites"}>
+                  {favorites.has(ns) ? "★" : "☆"}
+                </button>
+              </div>
+            ))}
+          </div>
 
           {/* Top row: gauge + stats */}
           <div style={C.topGrid}>
@@ -1150,7 +1571,10 @@ export default function KubernetesSentinel() {
           <div style={C.tabBar}>
             {TABS.map(t => (
               <button key={t.id} style={C.tab(activeTab === t.id)}
-                onClick={() => setActiveTab(t.id)}>
+                onClick={() => {
+                  setActiveTab(t.id);
+                  if (t.id === "diagnosis") setAutoNewBadge(false);
+                }}>
                 {t.label}
               </button>
             ))}
@@ -1158,11 +1582,23 @@ export default function KubernetesSentinel() {
 
           {/* Tab content */}
           <div style={C.card}>
-            {activeTab === "pods"      && <PodsTab      pods={pods} onOpenLogs={setLogDrawerPod} />}
-            {activeTab === "events"    && <EventsTab    events={events} />}
-            {activeTab === "resources" && <ResourcesTab resources={resources} />}
+            {activeTab === "pods"      && <PodsTab      pods={filteredPods} onOpenLogs={setLogDrawerPod} />}
+            {activeTab === "events"    && <EventsTab    events={filteredEvents} />}
+            {activeTab === "resources" && <ResourcesTab resources={filteredResources} />}
             {activeTab === "timeline"  && <TimelineTab  data={timeline} />}
-            {activeTab === "diagnosis" && <DiagnosisTab />}
+            {activeTab === "history"   && (
+              <HistoryTab onRerun={(focus) => {
+                setDiagFocusHint(focus);
+                setActiveTab("diagnosis");
+                setAutoNewBadge(false);
+              }} />
+            )}
+            {activeTab === "diagnosis" && (
+              <DiagnosisTab
+                focusHint={diagFocusHint}
+                externalResult={autoResult}
+              />
+            )}
           </div>
 
         </main>
@@ -1171,6 +1607,13 @@ export default function KubernetesSentinel() {
       {/* Log drawer — rendered outside main so it overlays everything */}
       {logDrawerPod && (
         <LogDrawer pod={logDrawerPod} onClose={() => setLogDrawerPod(null)} />
+      )}
+
+      {/* Auto-diagnosis toast */}
+      {autoToast && (
+        <div style={C.toast}>
+          New anomalies detected. Auto-diagnosis running…
+        </div>
       )}
     </>
   );

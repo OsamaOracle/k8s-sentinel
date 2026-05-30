@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 # Load .env from the backend/ directory (no-op if file absent or dotenv missing)
@@ -38,6 +39,11 @@ cluster_state: dict[str, Any] = {
     "events": [],
     "resources": {},
     "last_updated": None,
+    "auto_diagnosis_trigger": {
+        "should_trigger": False,
+        "triggered_at": None,
+        "anomaly_snapshot": [],
+    },
 }
 
 _stop_event = threading.Event()
@@ -632,6 +638,24 @@ def _poll_loop() -> None:
                 )
                 anomaly_count = len(anomalies)
                 insert_snapshot(score, pod_count, unhealthy_count, warning_count, anomaly_count)
+
+                # Auto-diagnosis trigger logic
+                interval = int(os.environ.get("AUTO_DIAGNOSIS_INTERVAL_SECONDS", "300"))
+                trigger = cluster_state["auto_diagnosis_trigger"]
+                if anomaly_count > 0:
+                    last_triggered = trigger.get("triggered_at")
+                    now_utc = datetime.now(timezone.utc)
+                    if last_triggered:
+                        elapsed = (now_utc - datetime.fromisoformat(last_triggered)).total_seconds()
+                        should = elapsed >= interval
+                    else:
+                        should = True
+                    trigger["should_trigger"] = should
+                    if should:
+                        trigger["triggered_at"] = now_utc.isoformat()
+                        trigger["anomaly_snapshot"] = anomalies
+                else:
+                    trigger["should_trigger"] = False
 
                 for anomaly in anomalies:
                     try:
