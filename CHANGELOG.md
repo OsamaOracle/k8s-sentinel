@@ -23,7 +23,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
-## [1.4.0] - 2026-04-12
+## [1.4.0] - 2026-05-30
 
 ### Added
 - Multi-LLM provider support with a clean abstraction layer in core/llm.py
@@ -47,7 +47,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
-## [1.3.0] - 2026-04-12
+## [1.3.0] - 2026-05-30
 
 ### Added
 - Namespace filter bar above the health score row with clickable namespace pills
@@ -76,7 +76,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
-## [1.2.0] - 2026-04-12
+## [1.2.0] - 2026-05-30
 
 ### Added
 - Slack alerting via incoming webhook when anomalies are detected
@@ -100,7 +100,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
-## [1.1.0] - 2026-04-06
+## [1.1.0] - 2026-05-30
 
 ### Added
 - Historical health timeline with a 24-hour SVG sparkline graph
@@ -116,7 +116,7 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
-## [1.0.0] - 2026-04-06
+## [1.0.0] - 2026-05-30
 
 ### Added
 - Initial release of Kubernetes Sentinel
