@@ -22,7 +22,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: k8s-sentinel
-          image: your-registry/k8s-sentinel:latest
+          image: ghcr.io/osamaoracle/k8s-sentinel:latest
           imagePullPolicy: Always
           ports:
             - name: http

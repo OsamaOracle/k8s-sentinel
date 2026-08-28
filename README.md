@@ -6,6 +6,9 @@ An AI-powered Kubernetes cluster health dashboard that monitors all namespaces i
 |--------|---------|-------|------------|---------|
 | 3.12+ | 0.115 | 18 | 1.29+ | MIT |
 
+![Docker](https://github.com/OsamaOracle/k8s-sentinel/actions/workflows/docker-publish.yml/badge.svg)
+![CI](https://github.com/OsamaOracle/k8s-sentinel/actions/workflows/ci.yml/badge.svg)
+
 ---
 
 ## Dashboard Preview
@@ -109,6 +112,28 @@ k8s-sentinel/
 | Docker Desktop | 24+ | Build image and run kind |
 | Kubernetes cluster | any | AKS, EKS, GKE, k3s or kind |
 | Anthropic API key | any | AI diagnosis feature |
+
+---
+
+## Deploy with one command
+
+The Docker image is automatically built and published to GitHub Container Registry on every release.
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/namespace.yaml
+kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/configmap.yaml
+kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/deployment.yaml
+kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/service.yaml
+```
+
+Then create your API key secret:
+
+```bash
+kubectl create secret generic sentinel-secrets \
+  --from-literal=ANTHROPIC_API_KEY=your-key \
+  -n k8s-sentinel
+```
 
 ---
 
