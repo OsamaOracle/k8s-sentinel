@@ -28,6 +28,9 @@ class BaseLLMProvider(abc.ABC):
     @abc.abstractmethod
     async def diagnose(self, prompt: str) -> str: ...
 
+    @abc.abstractmethod
+    async def complete(self, system: str, messages: list[dict]) -> str: ...
+
     @property
     @abc.abstractmethod
     def name(self) -> str: ...
@@ -49,6 +52,12 @@ class AnthropicProvider(BaseLLMProvider):
         return self._model
 
     async def diagnose(self, prompt: str) -> str:
+        return await self._call(_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], 1024)
+
+    async def complete(self, system: str, messages: list[dict]) -> str:
+        return await self._call(system, messages, 2048)
+
+    async def _call(self, system: str, messages: list[dict], max_tokens: int) -> str:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
@@ -60,9 +69,9 @@ class AnthropicProvider(BaseLLMProvider):
                 },
                 json={
                     "model": self._model,
-                    "max_tokens": 1024,
-                    "system": _SYSTEM_PROMPT,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                    "system": system,
+                    "messages": messages,
                 },
             )
             resp.raise_for_status()
@@ -81,7 +90,11 @@ class OpenAIProvider(BaseLLMProvider):
         return self._model
 
     async def diagnose(self, prompt: str) -> str:
+        return await self.complete(_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+
+    async def complete(self, system: str, messages: list[dict]) -> str:
         api_key = os.environ.get("OPENAI_API_KEY", "")
+        full_messages = [{"role": "system", "content": system}, *messages]
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -91,8 +104,8 @@ class OpenAIProvider(BaseLLMProvider):
                 },
                 json={
                     "model": self._model,
-                    "messages": [{"role": "user", "content": f"{_SYSTEM_PROMPT}\n\n{prompt}"}],
-                    "max_tokens": 1000,
+                    "messages": full_messages,
+                    "max_tokens": 2048,
                 },
             )
             resp.raise_for_status()
@@ -111,18 +124,29 @@ class GeminiProvider(BaseLLMProvider):
         return self._model
 
     async def diagnose(self, prompt: str) -> str:
+        return await self.complete(_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+
+    async def complete(self, system: str, messages: list[dict]) -> str:
         api_key = os.environ.get("GOOGLE_API_KEY", "")
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"gemini-1.5-pro:generateContent?key={api_key}"
         )
+        contents = [
+            {
+                "role": "user" if m["role"] == "user" else "model",
+                "parts": [{"text": m["content"]}],
+            }
+            for m in messages
+        ]
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 url,
                 headers={"Content-Type": "application/json"},
                 json={
-                    "contents": [{"parts": [{"text": f"{_SYSTEM_PROMPT}\n\n{prompt}"}]}],
-                    "generationConfig": {"maxOutputTokens": 1000},
+                    "systemInstruction": {"parts": [{"text": system}]},
+                    "contents": contents,
+                    "generationConfig": {"maxOutputTokens": 2048},
                 },
             )
             resp.raise_for_status()
@@ -143,18 +167,22 @@ class OllamaProvider(BaseLLMProvider):
         return self._model_name
 
     async def diagnose(self, prompt: str) -> str:
+        return await self.complete(_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+
+    async def complete(self, system: str, messages: list[dict]) -> str:
+        full_messages = [{"role": "system", "content": system}, *messages]
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                f"{self._base_url}/api/generate",
+                f"{self._base_url}/api/chat",
                 headers={"Content-Type": "application/json"},
                 json={
                     "model": self._model_name,
-                    "prompt": f"{_SYSTEM_PROMPT}\n\n{prompt}",
+                    "messages": full_messages,
                     "stream": False,
                 },
             )
             resp.raise_for_status()
-            return resp.json()["response"]
+            return resp.json()["message"]["content"]
 
 
 class AzureOpenAIProvider(BaseLLMProvider):
@@ -170,12 +198,16 @@ class AzureOpenAIProvider(BaseLLMProvider):
         return self._deployment
 
     async def diagnose(self, prompt: str) -> str:
+        return await self.complete(_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+
+    async def complete(self, system: str, messages: list[dict]) -> str:
         api_key = os.environ.get("AZURE_OPENAI_KEY", "")
         endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
         url = (
             f"{endpoint}/openai/deployments/{self._deployment}"
             f"/chat/completions?api-version=2024-02-01"
         )
+        full_messages = [{"role": "system", "content": system}, *messages]
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 url,
@@ -185,8 +217,8 @@ class AzureOpenAIProvider(BaseLLMProvider):
                 },
                 json={
                     "model": self._deployment,
-                    "messages": [{"role": "user", "content": f"{_SYSTEM_PROMPT}\n\n{prompt}"}],
-                    "max_tokens": 1000,
+                    "messages": full_messages,
+                    "max_tokens": 2048,
                 },
             )
             resp.raise_for_status()

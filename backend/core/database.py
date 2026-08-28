@@ -45,6 +45,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reports (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp    TEXT    NOT NULL,
+                title        TEXT    NOT NULL,
+                severity     TEXT    NOT NULL,
+                reported_by  TEXT,
+                markdown     TEXT    NOT NULL,
+                generated_at TEXT    NOT NULL
+            )
+            """
+        )
         conn.commit()
     finally:
         conn.close()
@@ -122,6 +135,42 @@ def search_diagnosis(query: str, limit: int = 50) -> list[dict]:
             "WHERE summary LIKE ? OR root_cause LIKE ? "
             "ORDER BY timestamp DESC LIMIT ?",
             (like, like, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def insert_report(
+    title: str,
+    severity: str,
+    reported_by: str | None,
+    markdown: str,
+) -> int:
+    """Insert an incident report and return the new row id."""
+    ts = datetime.now(timezone.utc).isoformat()
+    conn = _connect()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO reports "
+            "(timestamp, title, severity, reported_by, markdown, generated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, title, severity, reported_by, markdown, ts),
+        )
+        conn.commit()
+        return int(cursor.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def get_report_history(limit: int = 20) -> list[dict]:
+    """Return generated incident reports ordered newest first."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, timestamp, title, severity, reported_by, markdown, generated_at "
+            "FROM reports ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
     finally:

@@ -1187,6 +1187,781 @@ function DiagnosisTab({ focusHint, externalResult }) {
   );
 }
 
+// ── LLM helpers for new AI tabs ──────────────────────────────────────────────
+// In DEV_MODE the frontend calls window.claude.complete directly (Claude.ai
+// artifact runtime); in production it POSTs to the FastAPI backend.
+
+function buildClusterSnippet(pods, events, resources) {
+  return {
+    pods: pods.map(p => ({
+      name: p.name, namespace: p.namespace, phase: p.phase,
+      reason: p.reason, restart_count: p.restart_count, node: p.node,
+    })),
+    events: events.slice(0, 60).map(e => ({
+      reason: e.reason, namespace: e.namespace, message: e.message,
+      type: e.type, count: e.count, last_timestamp: e.last_timestamp,
+    })),
+    nodes: (resources.nodes || []).map(n => ({ name: n.name, ready: n.ready })),
+    deployments: (resources.deployments || []).map(d => ({
+      name: d.name, namespace: d.namespace, desired: d.desired, ready: d.ready,
+    })),
+  };
+}
+
+async function claudeComplete(prompt) {
+  if (typeof window === "undefined" || !window.claude || !window.claude.complete) {
+    throw new Error("Claude API is not available in this environment. Run the backend with a real API key.");
+  }
+  return await window.claude.complete(prompt);
+}
+
+function extractJson(text) {
+  const trimmed = (text || "").trim();
+  try { return JSON.parse(trimmed); } catch {}
+  const first = trimmed.indexOf("{");
+  const last  = trimmed.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(trimmed.slice(first, last + 1)); } catch {}
+  }
+  throw new Error("Model did not return valid JSON.");
+}
+
+// ── Minimal markdown renderer (for Report tab) ───────────────────────────────
+// Supports: h1/h2/h3, tables, code blocks (```), inline `code`, **bold**,
+// bulleted lists, and paragraphs. Deliberately narrow — no external deps.
+
+function renderInline(text) {
+  const parts = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0;
+  let m;
+  let key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("**")) {
+      parts.push(<strong key={`b${key++}`} style={{ color: "#f0f6fc", fontWeight: 700 }}>{tok.slice(2, -2)}</strong>);
+    } else {
+      parts.push(<code key={`c${key++}`} style={{ background: "#161b22", border: "1px solid #30363d",
+        padding: "1px 6px", borderRadius: 4, fontFamily: "monospace", fontSize: "12px", color: "#79c0ff" }}>
+        {tok.slice(1, -1)}
+      </code>);
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+function MarkdownRender({ text }) {
+  const lines = (text || "").split("\n");
+  const blocks = [];
+  let i = 0;
+  let keyId = 0;
+  const nextKey = () => `md-${keyId++}`;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.startsWith("```")) {
+      const lang = line.slice(3).trim();
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        buf.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++; // consume closing fence
+      blocks.push(
+        <pre key={nextKey()} style={{ background: "#0d1117", border: "1px solid #30363d",
+          borderRadius: 6, padding: "10px 14px", overflowX: "auto", fontFamily: "monospace",
+          fontSize: "12px", color: "#c9d1d9", margin: "8px 0" }}>
+          {lang && <div style={{ color: "#6e7681", fontSize: 10, marginBottom: 4 }}>{lang}</div>}
+          {buf.join("\n")}
+        </pre>
+      );
+      continue;
+    }
+
+    if (line.startsWith("# ")) {
+      blocks.push(<h1 key={nextKey()} style={{ fontSize: 24, color: "#f0f6fc", fontWeight: 800,
+        margin: "18px 0 10px", borderBottom: "1px solid #30363d", paddingBottom: 6 }}>
+        {renderInline(line.slice(2))}</h1>);
+      i++; continue;
+    }
+    if (line.startsWith("## ")) {
+      blocks.push(<h2 key={nextKey()} style={{ fontSize: 17, color: "#58a6ff", fontWeight: 700,
+        margin: "16px 0 8px" }}>{renderInline(line.slice(3))}</h2>);
+      i++; continue;
+    }
+    if (line.startsWith("### ")) {
+      blocks.push(<h3 key={nextKey()} style={{ fontSize: 14, color: "#79c0ff", fontWeight: 700,
+        margin: "12px 0 6px" }}>{renderInline(line.slice(4))}</h3>);
+      i++; continue;
+    }
+
+    if (line.startsWith("|") && i + 1 < lines.length && /^\|[\s\-|:]+\|?$/.test(lines[i + 1])) {
+      const headerCells = line.split("|").slice(1, -1).map(s => s.trim());
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].startsWith("|")) {
+        rows.push(lines[i].split("|").slice(1, -1).map(s => s.trim()));
+        i++;
+      }
+      blocks.push(
+        <table key={nextKey()} style={{ width: "100%", borderCollapse: "collapse",
+          fontSize: 12, margin: "10px 0", background: "#0d1117",
+          border: "1px solid #30363d", borderRadius: 6, overflow: "hidden" }}>
+          <thead>
+            <tr>
+              {headerCells.map((h, hi) => (
+                <th key={hi} style={{ padding: "8px 12px", textAlign: "left",
+                  color: "#8b949e", fontWeight: 700, borderBottom: "1px solid #30363d",
+                  background: "#161b22", fontSize: 11, textTransform: "uppercase",
+                  letterSpacing: "0.4px" }}>{renderInline(h)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, ri) => (
+              <tr key={ri} style={{ borderBottom: "1px solid #21262d" }}>
+                {r.map((c, ci) => (
+                  <td key={ci} style={{ padding: "8px 12px", color: "#c9d1d9",
+                    verticalAlign: "top" }}>{renderInline(c)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^[-*]\s+/, ""));
+        i++;
+      }
+      blocks.push(
+        <ul key={nextKey()} style={{ margin: "6px 0 10px 20px", color: "#c9d1d9", fontSize: 13, lineHeight: 1.6 }}>
+          {items.map((it, ii) => <li key={ii}>{renderInline(it)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+
+    if (line.trim() === "") { i++; continue; }
+    if (line.trim() === "---") {
+      blocks.push(<hr key={nextKey()} style={{ border: "none", borderTop: "1px solid #30363d", margin: "14px 0" }} />);
+      i++; continue;
+    }
+
+    blocks.push(
+      <p key={nextKey()} style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.6, margin: "6px 0" }}>
+        {renderInline(line)}
+      </p>
+    );
+    i++;
+  }
+  return <div>{blocks}</div>;
+}
+
+// ── Tab: kubectl (natural-language translator + runner) ──────────────────────
+
+function KubectlTab({ pods, events, resources }) {
+  const [instruction, setInstruction]   = useState("");
+  const [translating, setTranslating]   = useState(false);
+  const [translation, setTranslation]   = useState(null);
+  const [translateErr, setTranslateErr] = useState(null);
+  const [executions, setExecutions]     = useState([]);
+  const [runningAll, setRunningAll]     = useState(false);
+
+  const doTranslate = async () => {
+    if (!instruction.trim()) return;
+    setTranslating(true);
+    setTranslateErr(null);
+    setTranslation(null);
+    setExecutions([]);
+    try {
+      if (DEV_MODE) {
+        const snippet = buildClusterSnippet(pods, events, resources);
+        const prompt =
+`You are a senior Kubernetes SRE. Convert the user request into one or more kubectl commands using the cluster state below to resolve ambiguous names.
+
+Respond ONLY with a valid JSON object (no markdown fences, no prose outside) with exactly:
+{
+  "commands":    ["kubectl ...", "kubectl ..."],
+  "explanation": "<plain English>",
+  "risk":        "low|medium|high",
+  "risk_reason": "<why this risk level>"
+}
+
+Never suggest: delete namespace/secret, exec, rm, port-forward. Prefer read-only alternatives when the request is destructive; still return JSON.
+
+Cluster state (JSON):
+${JSON.stringify(snippet, null, 2)}
+
+User request: ${instruction.trim()}`;
+        const raw = await claudeComplete(prompt);
+        const data = extractJson(raw);
+        setTranslation({
+          commands: data.commands || [],
+          explanation: data.explanation || "",
+          risk: (data.risk || "medium").toLowerCase(),
+          risk_reason: data.risk_reason || "",
+        });
+      } else {
+        const res = await fetch(`${BASE_URL}/api/kubectl/translate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instruction: instruction.trim() }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        setTranslation(await res.json());
+      }
+    } catch (e) {
+      setTranslateErr(e.message);
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const doExecute = async (cmd) => {
+    setExecutions(prev => [...prev, { command: cmd, running: true }]);
+    try {
+      if (DEV_MODE) {
+        await new Promise(r => setTimeout(r, 600));
+        setExecutions(prev => prev.map((ex, i) => i === prev.length - 1
+          ? { command: cmd, stdout: `[DEV_MODE] Simulated execution of: ${cmd}\ndeployment.apps/example scaled`,
+              stderr: "", exit_code: 0, success: true, running: false }
+          : ex));
+        return;
+      }
+      const res = await fetch(`${BASE_URL}/api/kubectl/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        setExecutions(prev => prev.map((ex, i) => i === prev.length - 1
+          ? { command: cmd, stdout: "", stderr: err.detail || `HTTP ${res.status}`,
+              exit_code: -1, success: false, running: false }
+          : ex));
+        return;
+      }
+      const data = await res.json();
+      setExecutions(prev => prev.map((ex, i) => i === prev.length - 1 ? { ...data, running: false } : ex));
+    } catch (e) {
+      setExecutions(prev => prev.map((ex, i) => i === prev.length - 1
+        ? { command: cmd, stdout: "", stderr: e.message, exit_code: -1, success: false, running: false }
+        : ex));
+    }
+  };
+
+  const doExecuteAll = async () => {
+    if (!translation?.commands?.length) return;
+    setRunningAll(true);
+    for (const cmd of translation.commands) {
+      await doExecute(cmd);
+    }
+    setRunningAll(false);
+  };
+
+  const riskColors = {
+    low:    { bg: "rgba(34,197,94,0.15)",  fg: "#22c55e", label: "LOW" },
+    medium: { bg: "rgba(245,158,11,0.15)", fg: "#f59e0b", label: "MEDIUM" },
+    high:   { bg: "rgba(239,68,68,0.15)",  fg: "#ef4444", label: "HIGH" },
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div>
+        <div style={C.cardTitle}>Natural-language kubectl</div>
+        <textarea
+          style={{ ...C.diagInput, minHeight: 88 }}
+          placeholder={
+            "Describe what you want to do in plain English…\n" +
+            "e.g. scale api-gateway to 3 replicas in openclaw\n" +
+            "e.g. restart all pods in ml-pipeline\n" +
+            "e.g. show me pods that are not running"
+          }
+          value={instruction}
+          onChange={e => setInstruction(e.target.value)}
+        />
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 14 }}>
+          <button style={C.diagBtn(translating || !instruction.trim())}
+            onClick={doTranslate} disabled={translating || !instruction.trim()}>
+            {translating && <span style={{ width: 14, height: 14, border: "2px solid #ffffff40",
+              borderTop: "2px solid #fff", borderRadius: "50%",
+              animation: "spin 0.8s linear infinite", display: "inline-block" }} />}
+            {translating ? "Translating…" : "Translate"}
+          </button>
+          {translateErr && <span style={{ fontSize: 13, color: "#fca5a5" }}>⚠ {translateErr}</span>}
+        </div>
+      </div>
+
+      {translation && (
+        <div style={C.diagResultCard}>
+          <div style={C.diagSection}>
+            <div style={C.diagSectionTitle}>Explanation</div>
+            <p style={{ ...C.diagText, color: "#f0f6fc" }}>{translation.explanation}</p>
+          </div>
+          <div style={C.diagSection}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+              {(() => {
+                const rc = riskColors[translation.risk] || riskColors.medium;
+                return <span style={C.pill(rc.bg, rc.fg)}>{rc.label}</span>;
+              })()}
+              <span style={{ fontSize: 12, color: "#8b949e" }}>Risk assessment</span>
+            </div>
+            <p style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.5 }}>{translation.risk_reason}</p>
+          </div>
+          <div>
+            <div style={C.diagSectionTitle}>Generated commands</div>
+            {translation.commands.map((cmd, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <div style={{ ...C.cmdLine, flex: 1, marginBottom: 0 }}>$ {cmd}</div>
+                <button style={C.logBtn} onClick={() => doExecute(cmd)}>Run</button>
+              </div>
+            ))}
+            {translation.commands.length > 1 && (
+              <div style={{ marginTop: 10 }}>
+                <button style={C.diagBtn(runningAll)} onClick={doExecuteAll} disabled={runningAll}>
+                  {runningAll ? "Running…" : "Run All"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {executions.length > 0 && (
+        <div>
+          <div style={{ ...C.cardTitle, marginBottom: 8 }}>Execution results</div>
+          {executions.map((ex, i) => (
+            <div key={i} style={{ ...C.diagResultCard, marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ ...C.cmdLine, flex: 1, marginBottom: 0 }}>$ {ex.command}</div>
+                {ex.running ? (
+                  <span style={C.pill("rgba(88,166,255,0.15)", "#58a6ff")}>RUNNING</span>
+                ) : ex.success ? (
+                  <span style={C.pill("rgba(34,197,94,0.15)", "#22c55e")}>SUCCESS</span>
+                ) : (
+                  <span style={C.pill("rgba(239,68,68,0.15)", "#ef4444")}>FAILED (exit {ex.exit_code})</span>
+                )}
+              </div>
+              {ex.stdout && (
+                <pre style={{ background: "#0d1117", border: "1px solid #21262d", borderRadius: 6,
+                  padding: "8px 12px", fontFamily: "monospace", fontSize: 12, color: "#22c55e",
+                  whiteSpace: "pre-wrap", margin: "6px 0" }}>{ex.stdout}</pre>
+              )}
+              {ex.stderr && (
+                <pre style={{ background: "#0d1117", border: "1px solid #21262d", borderRadius: 6,
+                  padding: "8px 12px", fontFamily: "monospace", fontSize: 12, color: "#ef4444",
+                  whiteSpace: "pre-wrap", margin: "6px 0" }}>{ex.stderr}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: Chat (cluster conversation) ─────────────────────────────────────────
+
+const CHAT_STARTERS = [
+  "Which pod is using the most memory right now?",
+  "What happened in the last hour?",
+  "Why is my ml-pipeline deployment failing?",
+  "Which namespaces have the most warnings?",
+];
+
+function ChatTab({ pods, events, resources }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput]       = useState("");
+  const [sending, setSending]   = useState(false);
+  const [error, setError]       = useState(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, sending]);
+
+  const send = async (text) => {
+    const clean = text.trim();
+    if (!clean || sending) return;
+    setError(null);
+    const now = new Date().toISOString();
+    const nextMsgs = [...messages, { role: "user", content: clean, ts: now }];
+    setMessages(nextMsgs);
+    setInput("");
+    setSending(true);
+    try {
+      const forWire = nextMsgs.map(m => ({ role: m.role, content: m.content }));
+      let reply;
+      if (DEV_MODE) {
+        const snippet = buildClusterSnippet(pods, events, resources);
+        const historyStr = forWire.map(m =>
+          `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`
+        ).join("\n\n");
+        const prompt =
+`You are a senior SRE with read-only visibility into this Kubernetes cluster. Answer using ONLY the real data below. Be concise and direct. Suggest kubectl commands when useful. Say so plainly if the answer isn't in the data.
+
+Cluster snapshot (JSON):
+${JSON.stringify(snippet, null, 2)}
+
+Current time (UTC): ${new Date().toISOString()}
+
+Conversation so far:
+${historyStr}
+
+Respond only with your next reply as the assistant.`;
+        reply = await claudeComplete(prompt);
+      } else {
+        const res = await fetch(`${BASE_URL}/api/conversation`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: forWire }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        reply = data.content;
+      }
+      setMessages(m => [...m, { role: "assistant", content: (reply || "").trim(), ts: new Date().toISOString() }]);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send(input);
+    }
+  };
+
+  const clear = () => {
+    setMessages([]);
+    setError(null);
+  };
+
+  const AssistantIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 28 28" fill="none" style={{ flexShrink: 0, marginTop: 2 }}>
+      <circle cx="14" cy="14" r="13" stroke="#58a6ff" strokeWidth="1.5" />
+      <path d="M14 6l2.5 5h5.5l-4.5 3.5 1.5 5.5L14 17l-5 3 1.5-5.5L6 11h5.5z"
+        fill="#58a6ff" opacity="0.9" />
+    </svg>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: 560 }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "4px 6px 12px",
+        display: "flex", flexDirection: "column", gap: 12 }}>
+        {messages.length === 0 && (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ ...C.cardTitle, marginBottom: 12 }}>Ask about your cluster</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 520 }}>
+              {CHAT_STARTERS.map(q => (
+                <button key={q} style={{
+                  background: "#0d1117", border: "1px solid #30363d", color: "#c9d1d9",
+                  padding: "10px 14px", borderRadius: 8, cursor: "pointer",
+                  textAlign: "left", fontSize: 13, transition: "background 0.15s",
+                }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#1c2128"}
+                  onMouseLeave={e => e.currentTarget.style.background = "#0d1117"}
+                  onClick={() => send(q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((m, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+            <div style={{
+              display: "flex", gap: 8, maxWidth: "80%",
+              flexDirection: m.role === "user" ? "row-reverse" : "row",
+            }}>
+              {m.role === "assistant" && <AssistantIcon />}
+              <div style={{
+                background: m.role === "user" ? "rgba(31,111,235,0.15)" : "#0d1117",
+                border: `1px solid ${m.role === "user" ? "rgba(31,111,235,0.4)" : "#30363d"}`,
+                borderRadius: 10, padding: "10px 14px",
+                color: "#e6edf3", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap",
+              }}>
+                {m.content}
+                <div style={{ fontSize: 10, color: "#6e7681", marginTop: 6,
+                  textAlign: m.role === "user" ? "right" : "left" }}>
+                  {fmtTime(m.ts)}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {sending && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <AssistantIcon />
+            <div style={{ background: "#0d1117", border: "1px solid #30363d",
+              borderRadius: 10, padding: "10px 14px", display: "flex", gap: 4 }}>
+              {[0, 1, 2].map(i => (
+                <span key={i} style={{
+                  width: 6, height: 6, borderRadius: "50%", background: "#58a6ff",
+                  animation: `fadeIn 0.6s ${i * 0.15}s infinite alternate`,
+                }} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ ...C.errBanner, marginTop: 6 }}>
+            <span style={C.errMsg}>⚠ {error}</span>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, padding: "10px 6px 4px", borderTop: "1px solid #21262d" }}>
+        <textarea
+          style={{ ...C.diagInput, flex: 1, minHeight: 44, maxHeight: 120, resize: "none" }}
+          placeholder="Ask anything about your cluster… (Shift+Enter for newline)"
+          value={input}
+          rows={1}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={sending}
+        />
+        <button style={C.diagBtn(sending || !input.trim())} onClick={() => send(input)}
+          disabled={sending || !input.trim()}>Send</button>
+        <button style={{ ...C.logBtn, padding: "9px 14px" }} onClick={clear}
+          disabled={messages.length === 0 && !error}>Clear</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: Report (incident report generator) ──────────────────────────────────
+
+function ReportTab({ pods, events, resources, timeline }) {
+  const [title, setTitle]           = useState("");
+  const [severity, setSeverity]     = useState("P2");
+  const [reportedBy, setReportedBy] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [markdown, setMarkdown]     = useState("");
+  const [error, setError]           = useState(null);
+  const [history, setHistory]       = useState([]);
+
+  const fetchHistory = useCallback(async () => {
+    if (DEV_MODE) return;
+    try {
+      const res = await fetch(`${BASE_URL}/api/report/history?limit=20`);
+      if (res.ok) setHistory(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const doGenerate = async () => {
+    if (!title.trim()) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      let md;
+      if (DEV_MODE) {
+        const snippet = buildClusterSnippet(pods, events, resources);
+        const scores = (timeline || []).map(t => t.score);
+        const stats = scores.length ? {
+          min: Math.min(...scores), max: Math.max(...scores),
+          avg: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length),
+          sample_count: scores.length,
+        } : { min: null, max: null, avg: null, sample_count: 0 };
+        const today = new Date().toISOString().slice(0, 10);
+        const prompt =
+`You are a senior SRE writing a formal incident report. Use ONLY the real cluster data below. Respond ONLY with the markdown report (no code fence around the whole document).
+
+Generate an incident report using EXACTLY this markdown structure:
+
+# Incident Report: ${title.trim()}
+**Date:** ${today}
+**Severity:** ${severity}
+**Reported by:** ${reportedBy.trim() || "unknown"}
+**Status:** Resolved / Ongoing
+
+## Summary
+2-3 sentence summary.
+
+## Timeline
+| Time | Event |
+|------|-------|
+| HH:MM | ... |
+
+Build the timeline from health snapshots and events. Use UTC HH:MM.
+
+## Impact
+Affected namespaces and pods, restart counts, lowest health score in the window.
+
+## Root Cause
+Draw from the most recent diagnosis-style context.
+
+## Remediation Steps
+Bulleted kubectl commands as code-fenced snippets.
+
+## Prevention
+3 specific recommendations to prevent recurrence.
+
+## Health Score Timeline
+Min: ${stats.min ?? "n/a"} | Avg: ${stats.avg ?? "n/a"} | Max: ${stats.max ?? "n/a"} across ${stats.sample_count} samples.
+
+Cluster data (JSON):
+${JSON.stringify({ snippet, stats, timeline: (timeline || []).slice(-40) }, null, 2)}`;
+        md = await claudeComplete(prompt);
+      } else {
+        const res = await fetch(`${BASE_URL}/api/report/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            incident_title: title.trim(),
+            severity,
+            reported_by: reportedBy.trim() || null,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        md = data.markdown;
+        fetchHistory();
+      }
+      setMarkdown((md || "").trim());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const copyMarkdown = () => {
+    if (!markdown) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(markdown);
+  };
+
+  const downloadMarkdown = () => {
+    if (!markdown) return;
+    const blob = new Blob([markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const safe = (title || "incident-report").replace(/[^a-z0-9\-]+/gi, "-").toLowerCase();
+    a.download = `${safe}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const sevColors = {
+    P1: { bg: "rgba(239,68,68,0.15)",  fg: "#ef4444" },
+    P2: { bg: "rgba(245,158,11,0.15)", fg: "#f59e0b" },
+    P3: { bg: "rgba(59,130,246,0.15)", fg: "#60a5fa" },
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div>
+        <div style={C.cardTitle}>Generate incident report</div>
+        <input
+          style={{ ...C.diagInput, marginBottom: 10 }}
+          placeholder="Incident title — e.g. ml-pipeline CrashLoopBackOff"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+        />
+        <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: "#8b949e", marginRight: 4 }}>Severity</span>
+          {["P1", "P2", "P3"].map(s => {
+            const active = severity === s;
+            const c = sevColors[s];
+            return (
+              <button key={s}
+                onClick={() => setSeverity(s)}
+                style={{
+                  padding: "5px 14px", borderRadius: 8, cursor: "pointer",
+                  fontSize: 12, fontWeight: 700, letterSpacing: "0.4px",
+                  background: active ? c.bg : "transparent",
+                  border: `1px solid ${active ? c.fg : "#30363d"}`,
+                  color: active ? c.fg : "#8b949e",
+                  transition: "all 0.15s",
+                }}>{s}</button>
+            );
+          })}
+        </div>
+        <input
+          style={{ ...C.diagInput, marginBottom: 10 }}
+          placeholder="Reported by (optional)"
+          value={reportedBy}
+          onChange={e => setReportedBy(e.target.value)}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <button style={C.diagBtn(generating || !title.trim())}
+            onClick={doGenerate} disabled={generating || !title.trim()}>
+            {generating && <span style={{ width: 14, height: 14, border: "2px solid #ffffff40",
+              borderTop: "2px solid #fff", borderRadius: "50%",
+              animation: "spin 0.8s linear infinite", display: "inline-block" }} />}
+            {generating ? "Generating incident report…" : "Generate Report"}
+          </button>
+          {error && <span style={{ fontSize: 13, color: "#fca5a5" }}>⚠ {error}</span>}
+        </div>
+      </div>
+
+      {markdown && (
+        <div style={{ ...C.diagResultCard, position: "relative" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
+            <button style={C.logBtn} onClick={copyMarkdown}>Copy Markdown</button>
+            <button style={C.logBtn} onClick={downloadMarkdown}>Download .md</button>
+          </div>
+          <MarkdownRender text={markdown} />
+        </div>
+      )}
+
+      {!DEV_MODE && history.length > 0 && (
+        <div>
+          <div style={{ ...C.cardTitle, marginBottom: 8 }}>Previous reports</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {history.map(item => {
+              const c = sevColors[item.severity] || sevColors.P2;
+              return (
+                <div key={item.id} style={{
+                  ...C.histCard, cursor: "pointer",
+                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                }}
+                  onClick={() => setMarkdown(item.markdown)}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 13, color: "#e6edf3", fontWeight: 600 }}>{item.title}</span>
+                    <span style={C.histTime}>{fmtHistoryTime(item.timestamp)}</span>
+                  </div>
+                  <span style={C.pill(c.bg, c.fg)}>{item.severity}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function KubernetesSentinel() {
@@ -1396,6 +2171,9 @@ export default function KubernetesSentinel() {
     { id: "resources", label: "Resources" },
     { id: "timeline",  label: "Timeline" },
     { id: "history",   label: "History" },
+    { id: "kubectl",   label: "kubectl" },
+    { id: "chat",      label: "Chat" },
+    { id: "report",    label: "Report" },
     { id: "diagnosis", label: autoNewBadge ? "Diagnosis 🔴" : "Diagnosis" },
   ];
 
@@ -1592,6 +2370,15 @@ export default function KubernetesSentinel() {
                 setActiveTab("diagnosis");
                 setAutoNewBadge(false);
               }} />
+            )}
+            {activeTab === "kubectl"   && (
+              <KubectlTab pods={filteredPods} events={filteredEvents} resources={filteredResources} />
+            )}
+            {activeTab === "chat"      && (
+              <ChatTab pods={filteredPods} events={filteredEvents} resources={filteredResources} />
+            )}
+            {activeTab === "report"    && (
+              <ReportTab pods={filteredPods} events={filteredEvents} resources={filteredResources} timeline={timeline} />
             )}
             {activeTab === "diagnosis" && (
               <DiagnosisTab
