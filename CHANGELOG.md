@@ -23,6 +23,59 @@ All notable changes to Kubernetes Sentinel are documented here.
 
 ---
 
+## [1.6.0] - 2026-05-30
+
+### Added
+- GitHub Actions CI/CD workflow that automatically builds and publishes the Docker image on every push to main
+- Docker image published to GitHub Container Registry at ghcr.io/osamaoracle/k8s-sentinel
+- Image tagged automatically with version number, major.minor, and latest on every release
+- Multi-architecture build supporting amd64 and arm64
+- GitHub Actions cache for Docker layers reducing build time on repeat runs
+- CI workflow that runs on every push and pull request to catch syntax errors before merge
+- Python syntax check across all backend files using py_compile
+- Import validation running python -c "import main" with DEV_MODE=true to catch missing modules
+- One-command Kubernetes deployment using raw GitHub URLs, no local build required
+- Pull request builds run without pushing so contributors can verify their changes safely
+- Node.js deprecation fixed by upgrading docker/build-push-action to v6
+
+### Changed
+- k8s/deployment.yaml image updated from placeholder to ghcr.io/osamaoracle/k8s-sentinel:latest
+- imagePullPolicy set to Always so clusters always pull the latest published image
+- README updated with GitHub Actions badges and one-command deploy section
+
+---
+
+## [1.5.0] - 2026-05-30
+
+### Added
+- Natural Language kubectl tab allowing plain English instructions to be translated into kubectl commands
+- POST /api/kubectl/translate endpoint using the active LLM provider to generate commands with risk scoring
+- POST /api/kubectl/execute endpoint running translated commands with strict security restrictions
+- Commands are blocked if they contain rm, delete secret, delete namespace, exec, or port-forward
+- Risk scoring on every translation: LOW in green, MEDIUM in amber, HIGH in red with plain English reason
+- Run and Run All buttons to execute translated commands directly from the dashboard
+- Execution results showing stdout in green, stderr in red, and a success or failure badge
+- Cluster Conversation tab with a full persistent chat interface powered by the active LLM
+- POST /api/conversation endpoint passing full real-time cluster state as context to the LLM
+- Chat bubbles with user messages right-aligned in blue and assistant messages left-aligned in dark
+- Auto-scroll to latest message, three-dot loading animation, and Enter to send
+- Four starter questions shown on empty conversation to guide first-time users
+- Clear conversation button to start fresh
+- Incident Report Generator tab producing professional postmortem documents in one click
+- POST /api/report/generate endpoint pulling health timeline, diagnosis history, and current cluster state
+- Reports include summary, timeline table, impact assessment, root cause, remediation steps, and prevention recommendations
+- GET /api/report/history endpoint returning previously generated reports
+- Reports table added to SQLite database with insert_report and get_report_history functions
+- Copy Markdown and Download .md buttons on every generated report
+- P1, P2, P3 severity selector with color-coded buttons: red, amber, and blue
+- Report history cards below the generator showing previous reports with click to view
+
+### Changed
+- Dashboard now has 9 tabs: Pods, Events, Resources, Timeline, History, kubectl, Chat, Report, Diagnosis
+- database.py updated with reports table initialized on startup
+
+---
+
 ## [1.4.0] - 2026-05-30
 
 ### Added

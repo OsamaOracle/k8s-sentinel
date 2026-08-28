@@ -115,28 +115,6 @@ k8s-sentinel/
 
 ---
 
-## Deploy with one command
-
-The Docker image is automatically built and published to GitHub Container Registry on every release.
-
-```bash
-kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/namespace.yaml
-kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/rbac.yaml
-kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/configmap.yaml
-kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/deployment.yaml
-kubectl apply -f https://raw.githubusercontent.com/OsamaOracle/k8s-sentinel/main/k8s/service.yaml
-```
-
-Then create your API key secret:
-
-```bash
-kubectl create secret generic sentinel-secrets \
-  --from-literal=ANTHROPIC_API_KEY=your-key \
-  -n k8s-sentinel
-```
-
----
-
 ## Option A: Run Locally Without a Cluster
 
 This mode uses mock data so you can see the full dashboard without any Kubernetes cluster. The entire setup takes under five minutes.
