@@ -2,6 +2,8 @@
 
 An AI-powered Kubernetes cluster health dashboard that monitors all namespaces in real time, detects anomalies automatically, and uses Claude AI to generate plain-English root-cause diagnoses with ready-to-run kubectl remediation commands.
 
+A lightweight Kubernetes dashboard that watches your cluster and tells you what's wrong
+
 | Python | FastAPI | React | Kubernetes | License |
 |--------|---------|-------|------------|---------|
 | 3.12+ | 0.115 | 18 | 1.29+ | MIT |
