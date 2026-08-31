@@ -13,6 +13,12 @@ A lightweight Kubernetes dashboard that watches your cluster and tells you what'
 
 ---
 
+## Quick Links
+
+[Features](#features) · [Quick Start](#option-a-run-locally-without-a-cluster) · [Deploy to Kubernetes](#option-c-deploy-to-kubernetes) · [API Reference](#api-reference) · [Troubleshooting](#troubleshooting)
+
+---
+
 ## Dashboard Preview
 
 ![Kubernetes Sentinel Dashboard](docs/screenshots/dashboard.png)
